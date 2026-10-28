@@ -1,27 +1,48 @@
 // ─── Fully-automatic scheduler: N videos/day, zero clicks ────────────────
+// Slot grid: the day's videos are spread EVENLY across the active window
+// (interval = window ÷ videosPerDay), so 6/day on an 8→23 window fires at
+// 08:00, 10:30, 13:00, 15:30, 18:00, 20:30 server time. The gap is capped
+// at 3 hours so fresh content always keeps flowing.
 import { db } from '@/lib/db'
 import { getAutomation, setSetting, getSetting } from './settings'
-import { generateAutoTopic } from './ai'
+import { generateAutoTopic, fetchTrendingTopics } from './ai'
 import { kickWorker, log } from './pipeline'
 import { SEED_TOPICS, type VideoFormat } from './constants'
 
 const g = globalThis as unknown as { __tfSchedulerBooted?: boolean }
 
-function computeNextRun(videosPerDay: number, startHour: number, endHour: number): number {
-  const interval = Math.max(30 * 60_000, (24 * 3600_000) / Math.max(1, videosPerDay))
-  let next = Date.now() + interval
-  // if outside the active window, push to the next window start
-  const d = new Date(next)
-  const h = d.getHours()
-  if (h < startHour) {
-    d.setHours(startHour, 0, 0, 0)
-    next = d.getTime()
-  } else if (h >= endHour) {
-    d.setTime(next + 3600_000 * 24)
-    d.setHours(startHour, 0, 0, 0)
-    next = d.getTime()
+// User-facing promise: a fresh video at least every 3 hours.
+const MAX_GAP_MS = 3 * 3600_000
+
+function windowHours(startHour: number, endHour: number): number {
+  return endHour > startHour ? endHour - startHour : 24
+}
+
+/** Even spacing: interval = activeWindow / videosPerDay, capped at 3h
+ *  (never shorter than 30 min). */
+export function slotIntervalMs(videosPerDay: number, startHour: number, endHour: number): number {
+  const n = Math.max(1, videosPerDay)
+  const per = (windowHours(startHour, endHour) * 3600_000) / n
+  return Math.max(30 * 60_000, Math.min(MAX_GAP_MS, per))
+}
+
+/** Next slot of the day's grid at/after `from`: windowStart + k·interval.
+ *  When today's grid is exhausted, falls through to tomorrow's first slot. */
+export function nextSlotMs(videosPerDay: number, startHour: number, endHour: number, from: number): number {
+  const interval = slotIntervalMs(videosPerDay, startHour, endHour)
+  const n = Math.max(1, videosPerDay)
+  for (let day = 0; day < 8; day++) {
+    const base = new Date(from)
+    base.setDate(base.getDate() + day)
+    base.setHours(startHour, 0, 0, 0)
+    for (let k = 0; k < n; k++) {
+      const t = base.getTime() + k * interval
+      // a slot must still start inside the active window (endHour exclusive)
+      if (endHour > startHour && new Date(t).getHours() >= endHour) break
+      if (t >= from) return t
+    }
   }
-  return next
+  return from + interval
 }
 
 async function recentTitles(): Promise<string[]> {
@@ -48,25 +69,36 @@ async function tick(): Promise<void> {
     const cfg = await getAutomation()
     if (!cfg.enabled) return
 
+    // sweep: auto-publish any Ready auto-video (crash recovery / backlog).
+    // Only videos idle ≥5 min — a failed upload backs off instead of retry-looping.
+    const sweep = await db.video.findFirst({
+      where: { status: 'ready', source: 'auto', updatedAt: { lt: new Date(Date.now() - 5 * 60_000) } },
+      orderBy: { updatedAt: 'asc' },
+    })
+    if (sweep) {
+      const { autoPublishIfEnabled } = await import('./publish')
+      if (await autoPublishIfEnabled(sweep.id)) return // upload running — next tick continues
+    }
+
     const now = Date.now()
     const nextRaw = await getSetting('nextAutoRunAt')
-    let nextAt = nextRaw ? parseInt(nextRaw, 10) : NaN
+    const nextAt = nextRaw ? parseInt(nextRaw, 10) : NaN
 
     // while disabled, keep re-arming so enabling starts fresh in ~45s
     if (!nextRaw || isNaN(nextAt)) {
-      nextAt = now + 45_000
-      await setSetting('nextAutoRunAt', String(nextAt))
+      await setSetting('nextAutoRunAt', String(now + 45_000))
       return
     }
 
     if (now < nextAt) return
 
-    // schedule the following run first (so a slow generation can't tight-loop)
-    const following = computeNextRun(cfg.videosPerDay, cfg.startHour, cfg.endHour)
+    // schedule the following slot FIRST (so a slow generation can't tight-loop)
+    const following = nextSlotMs(cfg.videosPerDay, cfg.startHour, cfg.endHour, Date.now() + 60_000)
     await setSetting('nextAutoRunAt', String(following))
 
-    // enqueue one auto video
+    // enqueue one auto video (topics ride live Google Trends when available)
     const titles = await recentTitles()
+    const trends = await fetchTrendingTopics()
     let topic: string
     try {
       topic = await generateAutoTopic(cfg.niche, titles)
@@ -83,8 +115,10 @@ async function tick(): Promise<void> {
         source: 'auto',
       },
     })
-    await log(v.id, 'system', `Auto-pilot scheduled this video (topic: "${topic}")`, 'success')
-    console.log(`[scheduler] enqueued auto video ${v.id} — next run at ${new Date(following).toISOString()}`)
+    await log(v.id, 'system', trends.length
+      ? `Auto-pilot picked a topic riding live Google Trends (top trend: "${trends[0]}") — topic: "${topic}"`
+      : `Auto-pilot scheduled this video (topic: "${topic}")`, 'success')
+    console.log(`[scheduler] enqueued auto video ${v.id} — next slot at ${new Date(following).toISOString()}`)
 
     kickWorker().catch(e => console.error('[scheduler] worker kick failed:', e))
   } catch (e) {

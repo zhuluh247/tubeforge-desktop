@@ -32,7 +32,8 @@ RUN bunx prisma generate \
 ENV NODE_ENV=production \
     HOSTNAME=0.0.0.0 \
     PORT=3000 \
-    RENDER_SCALE=720
+    RENDER_SCALE=720 \
+    TZ=Africa/Lagos
 
 EXPOSE 3000
 

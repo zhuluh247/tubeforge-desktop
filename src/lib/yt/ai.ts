@@ -130,7 +130,7 @@ export async function generateScript(
 Requirements:
 - EXACTLY ${minScenes} to ${maxScenes} scenes. Each scene is one beat of the video.
 - Each scene.narration: spoken words for that scene, max ${f.sceneMaxChars} characters. Write for text-to-speech: plain sentences, no emojis, no markdown, no abbreviations with periods like "Dr." or "U.S." (write them out), spell numbers so they sound natural.
-- Each scene.imagePrompt: describe the EXACT thing this scene's narration is about — one clear focal subject with concrete visual nouns (creatures, places, objects, actions straight from the narration). NEVER generic/abstract backgrounds. Style: cinematic, dramatic lighting, photorealistic. No text/words/captions in the image.
+- Each scene.imagePrompt: a movie-still of EXACTLY what that scene's narration says — one clear focal subject with concrete visual nouns (creatures, places, objects, actions straight from the narration) plus setting and camera angle. NEVER generic/abstract backgrounds, NEVER add things the narration does not mention. 15-30 words. Style: cinematic, dramatic lighting, photorealistic. No text/words/captions in the image.
 - Each scene.caption: a 3-6 word punchy caption summarizing the scene (used as on-screen text).
 - Scene 1 narration is the HOOK: a shocking claim or question in the first 2 seconds. The script.hook field repeats scene 1 narration.
 - script.title: clickbait-but-true YouTube title, max 90 chars.
@@ -159,10 +159,57 @@ Reply with EXACTLY this JSON shape:
   return parsed
 }
 
+// ─── Free trending topics (Google Trends RSS — no key, no account, $0) ────
+// https://trends.google.com/trending/rss?geo=US returns the day's top
+// searches with real search volume. Cached 3h so auto-pilot never hammers
+// it. On any failure we return [] and topic generation falls back to
+// evergreen ideas — the pipeline never dies because trends are down.
+
+let _trendsCache: { at: number; topics: string[] } | null = null
+
+function xmlDecode(s: string): string {
+  return s
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&(?:#39|apos);/g, "'")
+    .trim()
+}
+
+export async function fetchTrendingTopics(): Promise<string[]> {
+  if (_trendsCache && Date.now() - _trendsCache.at < 3 * 3600_000) return _trendsCache.topics
+  const geo = (process.env.TRENDS_GEO || 'US').toUpperCase().slice(0, 2)
+  try {
+    const res = await fetch(`https://trends.google.com/trending/rss?geo=${encodeURIComponent(geo)}`, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; TubeForge/1.0)' },
+      signal: AbortSignal.timeout(15_000),
+    })
+    if (!res.ok) throw new Error(`trends RSS responded ${res.status}`)
+    const xml = await res.text()
+    const topics = [...xml.matchAll(/<item>([\s\S]*?)<\/item>/g)]
+      .map(m => m[1].match(/<title>([\s\S]*?)<\/title>/)?.[1] || '')
+      .map(xmlDecode)
+      .filter(t => t.length >= 3)
+      .slice(0, 12)
+    if (!topics.length) throw new Error('trends RSS had no items')
+    _trendsCache = { at: Date.now(), topics }
+    return topics
+  } catch (e) {
+    console.warn(`[trends] unavailable (${e instanceof Error ? e.message : e}) — falling back to evergreen topics`)
+    return _trendsCache?.topics || []
+  }
+}
+
 export async function generateAutoTopic(niche: string, recentTitles: string[]): Promise<string> {
   const sys = `You invent viral YouTube video topics for a faceless "${niche}" facts channel. Reply with ONLY the topic text — one line, no quotes, no numbering.`
   const avoid = recentTitles.slice(0, 12).join(' | ') || 'none yet'
-  const user = `Invent one fresh, highly clickable facts topic (max 80 characters). Avoid anything similar to these existing titles: ${avoid}. Topics should be surprising, specific, and curiosity-driving.`
+  // Ride live search demand: blend a trending search into the niche when it fits
+  const trends = await fetchTrendingTopics()
+  const trendLine = trends.length
+    ? `\n\nLive Google Trends RIGHT NOW (massive search volume): ${trends.slice(0, 10).join(' | ')}. If one of these can be spun into a surprising "${niche}" angle — a fact, mystery, ranking or comparison people are ALREADY searching for — build the topic around it to ride that wave. Keep it evergreen enough to still make sense next week.`
+    : ''
+  const user = `Invent one fresh, highly clickable facts topic (max 80 characters). Avoid anything similar to these existing titles: ${avoid}. Topics should be surprising, specific, and curiosity-driving.${trendLine}`
   try {
     const raw = await chat(sys, user)
     const topic = raw.split('\n')[0].replace(/^["'\d.\-\s]+/, '').trim()
@@ -626,7 +673,7 @@ export async function generateImage(prompt: string, size: string, outPath: strin
 }
 
 export function sanitizeImagePrompt(p: string): string {
-  return `${p.replace(/["\n]/g, ' ').slice(0, 400)}, cinematic lighting, ultra detailed, photorealistic, dramatic composition, no text, no watermark`
+  return `${p.replace(/["\n]/g, ' ').slice(0, 420)}, cinematic film still, dramatic volumetric lighting, vivid saturated colors, high contrast, ultra detailed, photorealistic, eye-catching composition, no text, no watermark`
 }
 
 export function scriptDir(videoId: string): string {

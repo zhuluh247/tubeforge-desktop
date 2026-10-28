@@ -44,6 +44,7 @@ export async function PUT(req: NextRequest) {
         videosPerDay: Math.min(12, Math.max(1, Number(a.videosPerDay) || 1)),
         startHour: Math.min(23, Math.max(0, Number(a.startHour) || 0)),
         endHour: Math.min(24, Math.max(1, Number(a.endHour) || 24)),
+        autoUpload: a.autoUpload === undefined ? true : !!a.autoUpload,
         formats: ['short', 'long', 'mixed'].includes(a.formats) ? a.formats : 'mixed',
         niche: typeof a.niche === 'string' && a.niche.trim() ? a.niche.trim().slice(0, 60) : 'Facts & Curiosities',
       })

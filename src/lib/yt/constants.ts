@@ -36,6 +36,7 @@ export const FORMATS: Record<
     captionFontSize: number
     captionMarginV: number
     captionOutline: number
+    fps: number
     genImageSize: string
     assPlayRes: { x: number; y: number }
     ttsSpeed: number
@@ -51,6 +52,9 @@ export const FORMATS: Record<
     captionFontSize: Math.max(18, Math.round(82 * K)),
     captionMarginV: Math.round(420 * K),
     captionOutline: Math.max(2, Math.round(7 * K)),
+    // 12 fps: half the frames of 24 → roughly half the encode time + RAM on
+    // Render's free CPU, while Ken Burns motion still reads smoothly.
+    fps: Math.min(30, Math.max(6, Number(process.env.FPS_SHORT) || 12)),
     genImageSize: '768x1344',
     assPlayRes: { x: even(1080 * K), y: even(1920 * K) },
     ttsSpeed: Number(process.env.TTS_SPEED_SHORT) || 1.18,
@@ -65,6 +69,7 @@ export const FORMATS: Record<
     captionFontSize: Math.max(18, Math.round(52 * K)),
     captionMarginV: Math.round(80 * K),
     captionOutline: Math.max(2, Math.round(4 * K)),
+    fps: 24,
     genImageSize: '1344x768',
     assPlayRes: { x: even(1920 * K), y: even(1080 * K) },
     ttsSpeed: 1.0,
@@ -123,6 +128,7 @@ export interface AutomationConfig {
   videosPerDay: number
   startHour: number
   endHour: number
+  autoUpload: boolean
   formats: 'short' | 'long' | 'mixed'
   niche: string
 }
@@ -132,6 +138,7 @@ export const DEFAULT_AUTOMATION: AutomationConfig = {
   videosPerDay: 3,
   startHour: 8,
   endHour: 23,
+  autoUpload: true,
   formats: 'short',
   niche: 'Facts & Curiosities',
 }

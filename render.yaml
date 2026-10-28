@@ -26,6 +26,10 @@ services:
       # for full HD.
       - key: RENDER_SCALE
         value: "720"
+      # Auto-Pilot schedule hours follow this timezone (08:00 = 8am YOUR time).
+      # Change to your own IANA zone if you are not in Nigeria.
+      - key: TZ
+        value: Africa/Lagos
       # NEEDED ONLY FOR SCRIPTS/SEO (glm-4.5-flash = free key from z.ai).
       # Scene images + voiceover are 100% free without any key.
       - key: ZAI_CONFIG_JSON

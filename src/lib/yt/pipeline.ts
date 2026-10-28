@@ -113,8 +113,10 @@ export async function runPipeline(videoId: string): Promise<void> {
     await setStage(videoId, 'visualizing', 'Painting scenes', 31)
     for (let i = 0; i < scenes.length; i++) {
       // Ground each image in WHAT IS BEING SAID: the LLM's visual prompt
-      // plus the scene's actual narration, so art always matches the story.
-      const visual = `${script.scenes[i].imagePrompt}. Scene context: ${script.scenes[i].narration}`
+      // first (it names the concrete subject), then a condensed slice of the
+      // scene's narration so the art always matches the exact moment spoken.
+      const ctx = script.scenes[i].narration.replace(/\s+/g, ' ').trim().slice(0, 160)
+      const visual = `${script.scenes[i].imagePrompt}. Depict exactly this moment: ${ctx}`
       await generateImage(
         sanitizeImagePrompt(visual),
         f.genImageSize, scenes[i].image, i
@@ -129,7 +131,12 @@ export async function runPipeline(videoId: string): Promise<void> {
     const clipPaths: string[] = []
     for (let i = 0; i < scenes.length; i++) {
       const clip = path.join(dir, `clip_${String(i).padStart(2, '0')}.mp4`)
-      await makeSceneClip(scenes[i].image, clip, scenes[i].dur, format, i)
+      // Include the inter-scene gap in the VIDEO scene too, so clip i spans
+      // exactly [start_i, start_{i+1}] on the audio timeline — picture, voice
+      // and caption cards all switch together (±1 frame), and the final mux
+      // never truncates the last words (video length == audio length).
+      const clipDur = scenes[i].dur + (i < scenes.length - 1 ? GAP : 0)
+      await makeSceneClip(scenes[i].image, clip, clipDur, format, i)
       clipPaths.push(clip)
       await setStage(videoId, 'rendering', `Animating ${i + 1}/${scenes.length}`, 56 + (14 * (i + 1)) / scenes.length)
     }
@@ -222,6 +229,12 @@ export async function kickWorker(): Promise<void> {
       })
       if (!next) break
       await runPipeline(next.id)
+      // Auto-publish: Auto-Pilot videos go straight to YouTube — zero clicks.
+      // (No-op for manual videos and when auto-publish is off / YT not connected.)
+      try {
+        const { autoPublishIfEnabled } = await import('./publish')
+        await autoPublishIfEnabled(next.id)
+      } catch { /* publish.ts logs its own errors */ }
     }
   } catch (e) {
     console.error('[worker] crashed:', e)
@@ -243,11 +256,20 @@ export async function recoverOnBoot(): Promise<number> {
     },
   })
   for (const v of stuck) {
+    // 'uploading' means the render FINISHED and only the upload died — the
+    // video file is intact, so restore it to Ready (auto-publish / the
+    // dashboard button will retry) instead of re-rendering from scratch.
+    const wasUploading = v.status === 'uploading'
     await db.video.update({
       where: { id: v.id },
-      data: { status: 'queued', stage: 'Queued (recovered)' },
+      data: {
+        status: wasUploading ? 'ready' : 'queued',
+        stage: wasUploading ? 'Ready (upload recovered)' : 'Queued (recovered)',
+      },
     })
-    await log(v.id, 'system', 'Server restarted mid-job — video requeued automatically.', 'warn')
+    await log(v.id, 'system', wasUploading
+      ? 'Server restarted during upload — video is intact, re-queued for publishing.'
+      : 'Server restarted mid-job — video requeued automatically.', 'warn')
   }
   return stuck.length
 }

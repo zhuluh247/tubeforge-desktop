@@ -62,11 +62,18 @@ export function AutomationPanel({
     if (!local.enabled || !nextAutoRunAt) return null
     const diff = Math.max(0, nextAutoRunAt - now)
     const h = Math.floor(diff / 3600000)
-    const m = Math.floor((diff % 3600000) / 60000)
-    const s = Math.floor((diff % 60000) / 1000)
+    const m = Math.floor(diff % 3600000 / 60000)
+    const s = Math.floor(diff % 60000 / 1000)
     if (h >= 1) return `${h}h ${m}m`
     if (m >= 1) return `${m}m ${s}s`
     return `${s}s`
+  })()
+
+  // spacing preview — same math as the server: window ÷ per-day, max 3h gap
+  const spacing = (() => {
+    const win = local.endHour > local.startHour ? local.endHour - local.startHour : 24
+    const mins = Math.min(180, Math.max(30, (win * 60) / Math.max(1, local.videosPerDay)))
+    return mins >= 60 ? `${(mins / 60).toFixed(mins % 60 === 0 ? 0 : 1)}h` : `${Math.round(mins)}m`
   })()
 
   return (
@@ -87,7 +94,7 @@ export function AutomationPanel({
       <CardContent className="space-y-4">
         <p className="text-[11px] text-zinc-500 leading-relaxed">
           {local.enabled
-            ? 'The factory picks fresh viral topics, produces full videos, and keeps the queue busy — hands off.'
+            ? 'The factory picks topics riding live Google Trends, produces full videos, and publishes them to YouTube by itself — hands off.'
             : 'Flip the switch and the factory produces videos around the clock with zero clicks.'}
         </p>
 
@@ -150,12 +157,29 @@ export function AutomationPanel({
           />
         </div>
 
+        <div className="flex items-center justify-between gap-2 rounded-lg border border-zinc-800 bg-zinc-950/60 p-2.5">
+          <div className="min-w-0">
+            <Label className="text-[11px] text-zinc-300">Auto-publish to YouTube</Label>
+            <p className="text-[10px] text-zinc-500 leading-snug">
+              Ready videos upload themselves — no publish clicks.
+            </p>
+          </div>
+          <Switch
+            checked={local.autoUpload}
+            disabled={disabled || saving}
+            onCheckedChange={v => save({ autoUpload: v })}
+            aria-label="Toggle auto-publish"
+            className="shrink-0"
+          />
+        </div>
+
         <div className={`rounded-lg border p-2.5 flex items-center gap-2.5 ${local.enabled ? 'border-emerald-900/60 bg-emerald-950/30' : 'border-zinc-800 bg-zinc-950/60'}`}>
           {local.enabled ? (
             <>
               <Zap className="w-4 h-4 text-emerald-400 shrink-0" />
               <p className="text-[11px] text-emerald-300">
                 Live — next video in <span className="font-bold tabular-nums">{countdown || '…'}</span>
+                <span className="text-emerald-500/80"> · one every ~{spacing}</span>
               </p>
             </>
           ) : (
@@ -166,7 +190,7 @@ export function AutomationPanel({
           )}
         </div>
         <p className="text-[10px] text-zinc-600 flex items-center gap-1">
-          <Settings2 className="w-3 h-3" /> Runs server-side — works even with the browser tab closed (while the app is running).
+          <Settings2 className="w-3 h-3" /> Runs server-side — works even with the browser tab closed (while the app is running). Schedule hours follow the server timezone (Africa/Lagos on Render).
         </p>
       </CardContent>
     </Card>

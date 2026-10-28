@@ -145,9 +145,10 @@ export async function makeSceneClip(
   variant: number
 ): Promise<void> {
   const f = FORMATS[format]
-  // 24 fps: filmic, and 20% fewer frames to encode than 30 — big win on
-  // weak CPUs (Render free tier). Ken Burns pans still look smooth.
-  const fps = 24
+  // Shorts default to 12 fps (half the frames of 24 → roughly half the encode
+  // load on Render's free CPU); long-form stays filmic 24. Ken Burns motion
+  // still reads smoothly at 12. Tune with FPS_SHORT env var.
+  const fps = f.fps
   const N = Math.max(2, Math.round(durationSec * fps))
   const W = f.resolution.w
   const H = f.resolution.h

@@ -47,6 +47,7 @@ export interface AutomationConfigUI {
   videosPerDay: number
   startHour: number
   endHour: number
+  autoUpload: boolean
   formats: 'short' | 'long' | 'mixed'
   niche: string
 }
