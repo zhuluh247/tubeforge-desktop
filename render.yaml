@@ -1,0 +1,35 @@
+# Render.com blueprint — deploy TubeForge with one click:
+# Render Dashboard → New → Blueprint → point at this repo.
+#
+# NOTE ON PLANS:
+#  - "starter" + disk  = videos, database and settings survive restarts (recommended)
+#  - "free"            = works, but the disk is EPHEMERAL (everything resets on
+#                        redeploy/restart) and the service sleeps after 15 min idle,
+#                        which pauses Auto-Pilot. Fine for testing.
+services:
+  - type: web
+    name: tubeforge
+    runtime: docker
+    plan: starter # switch to "free" for testing only (no persistent disk allowed)
+    healthCheckPath: /api/stats
+    disk:
+      name: tubeforge-data
+      mountPath: /data
+      sizeGB: 5 # ~1.5-2h of rendered video; grow as needed
+    envVars:
+      - key: DATABASE_URL
+        value: file:/data/db/custom.db
+      - key: MEDIA_ROOT
+        value: /data/media
+      # REQUIRED: Z.ai AI credentials as one-line JSON (see z-ai-config-SANDBOX.txt
+      # that came with the ZIP — paste its JSON line as the value in Render).
+      - key: ZAI_CONFIG_JSON
+        sync: false
+      # Optional: pre-set YouTube credentials via env instead of the Settings UI.
+      # Leave commented to configure them in the dashboard instead.
+      # - key: YOUTUBE_CLIENT_ID
+      #   sync: false
+      # - key: YOUTUBE_CLIENT_SECRET
+      #   sync: false
+      # - key: YOUTUBE_REFRESH_TOKEN
+      #   sync: false

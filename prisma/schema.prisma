@@ -1,0 +1,49 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Video {
+  id          String     @id @default(cuid())
+  topic       String
+  format      String     @default("short") // short | long
+  voice       String     @default("jam")
+  status      String     @default("queued") // queued|scripting|voicing|visualizing|rendering|thumbnailing|ready|uploading|uploaded|failed
+  stage       String     @default("Queued")
+  progress    Int        @default(0)
+  title       String?
+  description String?
+  tags        String? // JSON string array
+  script      String? // JSON full script {hook, scenes:[{narration,imagePrompt,caption}]}
+  scenesJson  String? // JSON resolved scenes [{narration,image,audio,dur,start}]
+  durationSec Float?
+  thumbPath   String?
+  videoPath   String?
+  audioPath   String?
+  youtubeId   String?
+  error       String?
+  source      String     @default("manual") // manual | auto
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+  logs        VideoLog[]
+}
+
+model VideoLog {
+  id        String   @id @default(cuid())
+  videoId   String
+  video     Video    @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  level     String   @default("info") // info|warn|error|success
+  stage     String
+  message   String
+  createdAt DateTime @default(now())
+}
+
+model Setting {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
+}

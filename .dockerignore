@@ -1,0 +1,12 @@
+node_modules
+.next
+.git
+media
+download
+db
+dev.log
+server.log
+*.md
+.env*
+tests
+examples
