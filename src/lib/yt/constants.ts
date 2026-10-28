@@ -46,14 +46,14 @@ export const FORMATS: Record<
     label: 'YouTube Short',
     resolution: { w: even(1080 * K), h: even(1920 * K) },
     sceneCount: [6, 8],
-    sceneMaxChars: 240,
-    captionWordsPerCard: 3,
+    sceneMaxChars: 220,
+    captionWordsPerCard: Math.max(1, Number(process.env.CAPTION_WORDS_SHORT) || 1),
     captionFontSize: Math.max(18, Math.round(82 * K)),
     captionMarginV: Math.round(420 * K),
     captionOutline: Math.max(2, Math.round(7 * K)),
     genImageSize: '768x1344',
     assPlayRes: { x: even(1080 * K), y: even(1920 * K) },
-    ttsSpeed: 1.05,
+    ttsSpeed: Number(process.env.TTS_SPEED_SHORT) || 1.18,
     targetDurSec: [35, 60],
   },
   long: {
@@ -132,7 +132,7 @@ export const DEFAULT_AUTOMATION: AutomationConfig = {
   videosPerDay: 3,
   startHour: 8,
   endHour: 23,
-  formats: 'mixed',
+  formats: 'short',
   niche: 'Facts & Curiosities',
 }
 

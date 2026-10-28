@@ -123,14 +123,14 @@ export async function generateScript(
 ): Promise<VideoScript> {
   const f = FORMATS[format]
   const [minScenes, maxScenes] = f.sceneCount
-  const sys = `You are a viral YouTube faceless-channel scriptwriter for the "${niche}" niche. You write tight, factual, high-retention narration. You ALWAYS reply with valid JSON only — no markdown fences, no commentary.`
+  const sys = `You are a viral YouTube faceless-channel scriptwriter for the "${niche}" niche. You write tight, factual, high-retention narration that is INFORMATION-DENSE: every single sentence delivers a new fact or twist — zero filler, zero "let's dive in", zero repetition. You ALWAYS reply with valid JSON only — no markdown fences, no commentary.`
 
   const user = `Write a complete production package for a ${f.label} about: "${topic}".
 
 Requirements:
 - EXACTLY ${minScenes} to ${maxScenes} scenes. Each scene is one beat of the video.
 - Each scene.narration: spoken words for that scene, max ${f.sceneMaxChars} characters. Write for text-to-speech: plain sentences, no emojis, no markdown, no abbreviations with periods like "Dr." or "U.S." (write them out), spell numbers so they sound natural.
-- Each scene.imagePrompt: a vivid, cinematic AI image prompt describing what to show (style: cinematic, dramatic lighting, photorealistic). No text/words/captions in the image.
+- Each scene.imagePrompt: describe the EXACT thing this scene's narration is about — one clear focal subject with concrete visual nouns (creatures, places, objects, actions straight from the narration). NEVER generic/abstract backgrounds. Style: cinematic, dramatic lighting, photorealistic. No text/words/captions in the image.
 - Each scene.caption: a 3-6 word punchy caption summarizing the scene (used as on-screen text).
 - Scene 1 narration is the HOOK: a shocking claim or question in the first 2 seconds. The script.hook field repeats scene 1 narration.
 - script.title: clickbait-but-true YouTube title, max 90 chars.

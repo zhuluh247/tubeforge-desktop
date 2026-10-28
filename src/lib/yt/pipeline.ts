@@ -24,7 +24,7 @@ interface SceneResolved {
   caption: string
 }
 
-const GAP = 0.22 // seconds of pause between scenes
+const GAP = 0.1 // seconds of pause between scenes — snappy, no dead air
 
 export async function log(videoId: string, stage: string, message: string, level = 'info') {
   try {
@@ -112,8 +112,11 @@ export async function runPipeline(videoId: string): Promise<void> {
     // ── Stage 3: AI scene images ───────────────────────────────────────
     await setStage(videoId, 'visualizing', 'Painting scenes', 31)
     for (let i = 0; i < scenes.length; i++) {
+      // Ground each image in WHAT IS BEING SAID: the LLM's visual prompt
+      // plus the scene's actual narration, so art always matches the story.
+      const visual = `${script.scenes[i].imagePrompt}. Scene context: ${script.scenes[i].narration}`
       await generateImage(
-        sanitizeImagePrompt(script.scenes[i].imagePrompt),
+        sanitizeImagePrompt(visual),
         f.genImageSize, scenes[i].image, i
       )
       await setStage(videoId, 'visualizing', `Scene art ${i + 1}/${scenes.length}`, 31 + (24 * (i + 1)) / scenes.length)
@@ -178,6 +181,15 @@ export async function runPipeline(videoId: string): Promise<void> {
     fs.rmSync(thumbBase, { force: true })
     await db.video.update({ where: { id: videoId }, data: { thumbPath } })
     await log(videoId, 'thumbnail', `Thumbnail ready — "${script.thumbnailText}"`, 'success')
+
+    // ── Disk diet ─────────────────────────────────────────────────────
+    // The dashboard only ever reads video.mp4, thumb.jpg and narration.wav.
+    // Delete per-scene intermediates so each Short leaves a small footprint
+    // (matters on Render's free tier, where disk is ephemeral and tight).
+    for (const s of scenes) {
+      fs.rmSync(s.image, { force: true })
+      fs.rmSync(s.audio, { force: true })
+    }
 
     // ── Done ───────────────────────────────────────────────────────────
     await db.video.update({
