@@ -220,7 +220,10 @@ export async function kickWorker(): Promise<void> {
 
 /** Crash recovery: reset stale in-flight videos back to queued on boot. */
 export async function recoverOnBoot(): Promise<number> {
-  const STALE_MS = 4 * 60_000 // a live worker updates the row every stage (<4min)
+  // A live worker updates the row at every stage — but a single final render
+  // can legitimately run 10-20 min on weak CPUs (Render free tier), so the
+  // stale window must comfortably exceed that.
+  const STALE_MS = 20 * 60_000
   const stuck = await db.video.findMany({
     where: {
       status: { in: [...STAGE_ORDER, 'uploading'] },

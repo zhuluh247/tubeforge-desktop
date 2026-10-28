@@ -88,7 +88,14 @@ export function ffprobeBin(): string {
   return resolveMediaBin('ffprobe')
 }
 
-export function run(bin: string, args: string[], timeoutMs = 8 * 60_000): Promise<void> {
+// Default 45 min — Render's free tier (0.1 CPU) encodes slowly, and a Short can
+// legitimately take 10-20 min. Override with FFMPEG_TIMEOUT_MS if needed.
+const FFMPEG_TIMEOUT_MS = (() => {
+  const n = Number(process.env.FFMPEG_TIMEOUT_MS)
+  return Number.isFinite(n) && n >= 10_000 ? n : 45 * 60_000
+})()
+
+export function run(bin: string, args: string[], timeoutMs = FFMPEG_TIMEOUT_MS): Promise<void> {
   return new Promise((resolve, reject) => {
     const p = spawn(bin, args, { stdio: ['ignore', 'pipe', 'pipe'] })
     let err = ''
@@ -138,15 +145,20 @@ export async function makeSceneClip(
   variant: number
 ): Promise<void> {
   const f = FORMATS[format]
-  const fps = 30
+  // 24 fps: filmic, and 20% fewer frames to encode than 30 — big win on
+  // weak CPUs (Render free tier). Ken Burns pans still look smooth.
+  const fps = 24
   const N = Math.max(2, Math.round(durationSec * fps))
 
   let scale: string
   let zoompan: string
   const sceneIdx = variant % 4
 
+  // Intermediate canvas: just big enough that the zoom never runs past the
+  // image edge (max zoom 1.16/1.12). The old 2160x4320 / 3840x2160 canvases
+  // cost ~4x the CPU for zero visible gain.
   if (format === 'short') {
-    scale = `scale=2160:4320:force_original_aspect_ratio=increase,crop=2160:4320,setsar=1`
+    scale = `scale=1350:2400:force_original_aspect_ratio=increase,crop=1350:2400,setsar=1`
     const s = '1080x1920'
     if (sceneIdx === 0)
       zoompan = `zoompan=z='min(1+0.16*on/${N},1.16)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${N}:s=${s}:fps=${fps}`
@@ -157,7 +169,7 @@ export async function makeSceneClip(
     else
       zoompan = `zoompan=z='1.12':x='(iw-iw/zoom)*(1-on/${N})':y='ih/2-(ih/zoom/2)':d=${N}:s=${s}:fps=${fps}`
   } else {
-    scale = `scale=3840:2160:force_original_aspect_ratio=increase,crop=3840:2160,setsar=1`
+    scale = `scale=2160:1216:force_original_aspect_ratio=increase,crop=2160:1216,setsar=1`
     const s = '1920x1080'
     if (sceneIdx === 0)
       zoompan = `zoompan=z='min(1+0.12*on/${N},1.12)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${N}:s=${s}:fps=${fps}`
@@ -169,11 +181,13 @@ export async function makeSceneClip(
       zoompan = `zoompan=z='1.08':x='(iw-iw/zoom)*(1-on/${N})':y='ih/2-(ih/zoom/2)':d=${N}:s=${s}:fps=${fps}`
   }
 
+  // Scene clips are INTERMEDIATES (fully re-encoded in finalRender), so we
+  // encode them as cheaply as possible: ultrafast + higher tolerance.
   await run(ffmpegBin(), [
     '-y', '-i', imgPath,
     '-filter_complex', `${scale},${zoompan},format=yuv420p`,
     '-frames:v', String(N),
-    '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '21',
+    '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '23',
     '-r', String(fps),
     outPath,
   ])
@@ -302,7 +316,7 @@ export async function finalRender(opts: {
     '-filter_complex',
     `[0:v]${vf}[v];[1:a]aresample=24000[voice];[2:a]apad[bed];[voice][bed]amix=inputs=2:duration=first:normalize=0[a]`,
     '-map', '[v]', '-map', '[a]',
-    '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '21',
+    '-c:v', 'libx264', '-preset', 'superfast', '-crf', '22',
     '-c:a', 'aac', '-b:a', '160k', '-ar', '24000',
     '-shortest', '-movflags', '+faststart',
     outPath,

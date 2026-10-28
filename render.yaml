@@ -21,8 +21,8 @@ services:
         value: file:/data/db/custom.db
       - key: MEDIA_ROOT
         value: /data/media
-      # REQUIRED: Z.ai AI credentials as one-line JSON (see z-ai-config-SANDBOX.txt
-      # that came with the ZIP — paste its JSON line as the value in Render).
+      # NEEDED ONLY FOR SCRIPTS/SEO (glm-4.5-flash = free key from z.ai).
+      # Scene images + voiceover are 100% free without any key.
       - key: ZAI_CONFIG_JSON
         sync: false
       # Optional: pre-set YouTube credentials via env instead of the Settings UI.

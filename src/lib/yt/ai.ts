@@ -460,12 +460,92 @@ function concatWavBuffers(buffers: Buffer[]): Buffer {
 }
 
 // ─── Image generation ────────────────────────────────────────────────────
+// 100% FREE by default:
+//   1. Pollinations.ai (Flux) — no API key, no balance, no cost.
+//   2. Z.ai images (PAID, opt-in only via IMAGE_PROVIDER=zai).
+//   3. Procedural gradient — guarantees the pipeline never dies.
 
 const GRADIENT_FALLBACKS = ['0x0f172a:0x334155', '0x1c1917:0x57534e', '0x14532d:0x4ade80', '0x450a0a:0xf87171']
 
-export async function generateImage(prompt: string, size: string, outPath: string, sceneIdx: number): Promise<void> {
+function sleep(ms: number): Promise<void> {
+  return new Promise(r => setTimeout(r, ms))
+}
+
+/** Pollinations likes big-ish canvases; 1024/1792 is its sweet spot and the
+ *  Ken Burns zoom gently upscales anyway. Keep it 16:9 or 9:16. */
+function pollinationsSize(size: string): { w: number; h: number } {
+  const [w, h] = size.split('x').map(Number)
+  if (h > w) return { w: 1024, h: 1792 }
+  if (w > h) return { w: 1792, h: 1024 }
+  return { w: 1024, h: 1024 }
+}
+
+/** Free image engine — Pollinations.ai. No key, no account, $0.
+ *
+ *  Anonymous tier limits: 1 image / 45s per IP, answered with HTTP 402
+ *  ("FREE_LIMIT ... Retry after Ns"). So we:
+ *    - pace every request ≥ IMAGE_FREE_GAP_MS after the previous one,
+ *    - cycle models flux → turbo → flux → turbo (whichever is open),
+ *    - honor the server's "Retry after" hint on 402.
+ *  Worst case is a few minutes per image on a heavily shared IP — still free.
+ */
+let _lastPollinationsAt = 0
+
+function parseRetryAfterMs(body: string): number | null {
+  const m = body.match(/retry after (\d+(?:\.\d+)?)s/i)
+  return m ? Math.ceil(parseFloat(m[1]) * 1000) : null
+}
+
+async function generateImagePollinations(prompt: string, size: string, outPath: string): Promise<void> {
+  const { w, h } = pollinationsSize(size)
+  const configured = process.env.IMAGE_FREE_MODEL // pin one model only if explicitly set
+  const models = configured ? [configured] : ['flux', 'turbo', 'flux', 'turbo', 'turbo']
+  const gapMs = Math.max(1000, Number(process.env.IMAGE_FREE_GAP_MS) || 46_000)
   let lastErr: unknown
-  for (let i = 1; i <= 4; i++) {
+
+  for (let i = 0; i < models.length; i++) {
+    try {
+      // pace: never fire more than one pollinations request per gap window
+      const since = Date.now() - _lastPollinationsAt
+      if (since < gapMs) await sleep(gapMs - since)
+      _lastPollinationsAt = Date.now()
+
+      const u = new URL(`https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}`)
+      u.searchParams.set('width', String(w))
+      u.searchParams.set('height', String(h))
+      u.searchParams.set('model', models[i])
+      u.searchParams.set('nologo', 'true')
+      u.searchParams.set('seed', String(Math.floor(Math.random() * 1e9)))
+      const res = await fetch(u, {
+        headers: { 'User-Agent': 'Mozilla/5.0 (compatible; TubeForge/1.0)' },
+        signal: AbortSignal.timeout(180_000),
+      })
+      if (res.status === 402) {
+        const body = await res.text().catch(() => '')
+        const wait = parseRetryAfterMs(body) ?? 30_000
+        throw Object.assign(new Error(`pollinations free-limit (402), retrying in ${Math.round(wait / 1000)}s`), { retryAfterMs: wait })
+      }
+      if (!res.ok) throw new Error(`pollinations responded ${res.status}`)
+      const ct = res.headers.get('content-type') || ''
+      const buf = Buffer.from(new Uint8Array(await res.arrayBuffer()))
+      if (!ct.startsWith('image/') || buf.length < 5000) {
+        throw new Error(`pollinations returned no image (${ct || 'unknown type'}, ${buf.length}B)`)
+      }
+      fs.writeFileSync(outPath, buf)
+      return
+    } catch (e) {
+      lastErr = e
+      const retryAfter = (e as { retryAfterMs?: number }).retryAfterMs
+      if (i < models.length - 1) await sleep(retryAfter ?? 8000 * (i + 1))
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error('pollinations failed')
+}
+
+/** Z.ai image API — PAID (needs balance/resource package). Opt-in upgrade. */
+async function generateImageZai(prompt: string, size: string, outPath: string, attempts: number): Promise<void> {
+  let lastErr: unknown
+  for (let i = 1; i <= attempts; i++) {
     try {
       const zai = await getZAI()
       const body: Record<string, unknown> = { prompt }
@@ -499,10 +579,41 @@ export async function generateImage(prompt: string, size: string, outPath: strin
       return
     } catch (e) {
       lastErr = e
-      if (i < 4) await new Promise(r => setTimeout(r, 2500 * i))
+      if (i < attempts) await sleep(2500 * i)
     }
   }
-  // Fallback: procedural gradient so the pipeline never dies
+  throw lastErr instanceof Error ? lastErr : new Error('Z.ai image generation failed')
+}
+
+export async function generateImage(prompt: string, size: string, outPath: string, sceneIdx: number): Promise<void> {
+  const provider = (process.env.IMAGE_PROVIDER || 'auto').toLowerCase()
+  const errors: string[] = []
+
+  // 1) FREE: Pollinations (default in "auto", forced with IMAGE_PROVIDER=pollinations)
+  if (provider === 'auto' || provider === 'pollinations') {
+    try {
+      await generateImagePollinations(prompt, size, outPath)
+      return
+    } catch (e) {
+      errors.push(`pollinations: ${e instanceof Error ? e.message : String(e)}`)
+    }
+  }
+
+  // 2) PAID: Z.ai (opt-in via IMAGE_PROVIDER=zai; in "auto" only as backup, 2 tries)
+  if (provider === 'auto' || provider === 'zai') {
+    if (zaiConfig()) {
+      try {
+        await generateImageZai(prompt, size, outPath, provider === 'zai' ? 4 : 2)
+        return
+      } catch (e) {
+        errors.push(`z.ai: ${e instanceof Error ? e.message : String(e)}`)
+      }
+    }
+  } else if (provider !== 'pollinations' && provider !== 'gradient') {
+    errors.push(`unknown IMAGE_PROVIDER "${provider}"`)
+  }
+
+  // 3) Fallback: procedural gradient so the pipeline never dies
   const [w, h] = size.split('x')
   const pal = GRADIENT_FALLBACKS[sceneIdx % GRADIENT_FALLBACKS.length]
   const [c0, c1] = pal.split(':')
@@ -511,7 +622,7 @@ export async function generateImage(prompt: string, size: string, outPath: strin
     '-y', '-f', 'lavfi', '-i', `gradients=s=${w}x${h}:c0=${c0}:c1=${c1}:x0=0:y0=0:x1=${w}:y1=${h}`,
     '-frames:v', '1', outPath,
   ])
-  console.warn(`[image] fallback gradient used for scene ${sceneIdx}: ${lastErr}`)
+  console.warn(`[image] fallback gradient used for scene ${sceneIdx}: ${errors.join(' | ') || 'no provider available'}`)
 }
 
 export function sanitizeImagePrompt(p: string): string {
