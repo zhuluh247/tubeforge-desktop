@@ -21,6 +21,11 @@ services:
         value: file:/data/db/custom.db
       - key: MEDIA_ROOT
         value: /data/media
+      # 720p renders: ~56% less CPU + RAM per frame so videos finish inside
+      # the free tier's 512MB. Delete this line (or set 1080) on paid plans
+      # for full HD.
+      - key: RENDER_SCALE
+        value: "720"
       # NEEDED ONLY FOR SCRIPTS/SEO (glm-4.5-flash = free key from z.ai).
       # Scene images + voiceover are 100% free without any key.
       - key: ZAI_CONFIG_JSON

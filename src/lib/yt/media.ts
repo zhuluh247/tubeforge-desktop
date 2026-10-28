@@ -149,17 +149,20 @@ export async function makeSceneClip(
   // weak CPUs (Render free tier). Ken Burns pans still look smooth.
   const fps = 24
   const N = Math.max(2, Math.round(durationSec * fps))
+  const W = f.resolution.w
+  const H = f.resolution.h
+  const s = `${W}x${H}`
+  // Intermediate canvas: 1.2x output — just enough headroom for the max
+  // zoom (1.16/1.12). Bigger canvases cost CPU+RAM for zero visible gain.
+  const cw = Math.round(W * 1.2 / 2) * 2
+  const ch = Math.round(H * 1.2 / 2) * 2
 
   let scale: string
   let zoompan: string
   const sceneIdx = variant % 4
 
-  // Intermediate canvas: just big enough that the zoom never runs past the
-  // image edge (max zoom 1.16/1.12). The old 2160x4320 / 3840x2160 canvases
-  // cost ~4x the CPU for zero visible gain.
   if (format === 'short') {
-    scale = `scale=1350:2400:force_original_aspect_ratio=increase,crop=1350:2400,setsar=1`
-    const s = '1080x1920'
+    scale = `scale=${cw}:${ch}:force_original_aspect_ratio=increase,crop=${cw}:${ch},setsar=1`
     if (sceneIdx === 0)
       zoompan = `zoompan=z='min(1+0.16*on/${N},1.16)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${N}:s=${s}:fps=${fps}`
     else if (sceneIdx === 1)
@@ -169,8 +172,7 @@ export async function makeSceneClip(
     else
       zoompan = `zoompan=z='1.12':x='(iw-iw/zoom)*(1-on/${N})':y='ih/2-(ih/zoom/2)':d=${N}:s=${s}:fps=${fps}`
   } else {
-    scale = `scale=2160:1216:force_original_aspect_ratio=increase,crop=2160:1216,setsar=1`
-    const s = '1920x1080'
+    scale = `scale=${cw}:${ch}:force_original_aspect_ratio=increase,crop=${cw}:${ch},setsar=1`
     if (sceneIdx === 0)
       zoompan = `zoompan=z='min(1+0.12*on/${N},1.12)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${N}:s=${s}:fps=${fps}`
     else if (sceneIdx === 1)
@@ -183,11 +185,14 @@ export async function makeSceneClip(
 
   // Scene clips are INTERMEDIATES (fully re-encoded in finalRender), so we
   // encode them as cheaply as possible: ultrafast + higher tolerance.
+  // -threads 2: the host exposes many cores but we only get a fraction of
+  // one — extra x264 threads just burn RAM (Render free OOM) for nothing.
   await run(ffmpegBin(), [
     '-y', '-i', imgPath,
     '-filter_complex', `${scale},${zoompan},format=yuv420p`,
     '-frames:v', String(N),
     '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '23',
+    '-threads', '2',
     '-r', String(fps),
     outPath,
   ])
@@ -316,7 +321,7 @@ export async function finalRender(opts: {
     '-filter_complex',
     `[0:v]${vf}[v];[1:a]aresample=24000[voice];[2:a]apad[bed];[voice][bed]amix=inputs=2:duration=first:normalize=0[a]`,
     '-map', '[v]', '-map', '[a]',
-    '-c:v', 'libx264', '-preset', 'superfast', '-crf', '22',
+    '-c:v', 'libx264', '-preset', 'superfast', '-crf', '22', '-threads', '2',
     '-c:a', 'aac', '-b:a', '160k', '-ar', '24000',
     '-shortest', '-movflags', '+faststart',
     outPath,

@@ -6,6 +6,15 @@ export const MEDIA_ROOT = path.resolve(process.env.MEDIA_ROOT || path.join(proce
 
 export type VideoFormat = 'short' | 'long'
 
+// ── Render scale ────────────────────────────────────────────────
+// 1080 (default) → Shorts 1080x1920, Long 1920x1080.
+// 720            → Shorts 720x1280,  Long 1280x720 — ~56% fewer pixels,
+//                  which on Render's free tier (512MB RAM, 0.1 CPU) is the
+//                  difference between finishing and being OOM-killed.
+// Caption layout scales with it automatically, so subtitles stay pixel-perfect.
+const K = Math.min(2, Math.max(0.5, (Number(process.env.RENDER_SCALE) || 1080) / 1080))
+const even = (n: number): number => Math.max(2, Math.round(n / 2) * 2)
+
 export const VOICES = [
   { id: 'jam', label: 'Jam — British narrator', desc: 'Refined UK accent, great for facts & documentaries' },
   { id: 'kazi', label: 'Kazi — Clear standard', desc: 'Crisp neutral delivery, high clarity' },
@@ -35,29 +44,29 @@ export const FORMATS: Record<
 > = {
   short: {
     label: 'YouTube Short',
-    resolution: { w: 1080, h: 1920 },
+    resolution: { w: even(1080 * K), h: even(1920 * K) },
     sceneCount: [6, 8],
     sceneMaxChars: 240,
     captionWordsPerCard: 3,
-    captionFontSize: 82,
-    captionMarginV: 420,
-    captionOutline: 7,
+    captionFontSize: Math.max(18, Math.round(82 * K)),
+    captionMarginV: Math.round(420 * K),
+    captionOutline: Math.max(2, Math.round(7 * K)),
     genImageSize: '768x1344',
-    assPlayRes: { x: 1080, y: 1920 },
+    assPlayRes: { x: even(1080 * K), y: even(1920 * K) },
     ttsSpeed: 1.05,
     targetDurSec: [35, 60],
   },
   long: {
     label: 'Long-form video',
-    resolution: { w: 1920, h: 1080 },
+    resolution: { w: even(1920 * K), h: even(1080 * K) },
     sceneCount: [10, 13],
     sceneMaxChars: 620,
     captionWordsPerCard: 8,
-    captionFontSize: 52,
-    captionMarginV: 80,
-    captionOutline: 4,
+    captionFontSize: Math.max(18, Math.round(52 * K)),
+    captionMarginV: Math.round(80 * K),
+    captionOutline: Math.max(2, Math.round(4 * K)),
     genImageSize: '1344x768',
-    assPlayRes: { x: 1920, y: 1080 },
+    assPlayRes: { x: even(1920 * K), y: even(1080 * K) },
     ttsSpeed: 1.0,
     targetDurSec: [150, 300],
   },

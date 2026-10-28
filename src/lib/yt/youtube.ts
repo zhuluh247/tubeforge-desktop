@@ -240,9 +240,13 @@ export async function uploadVideo(
   const location = init.headers.get('location')
   if (!location) throw new Error('YouTube did not return an upload session URL')
 
-  // 2) PUT the whole file in one request (our renders are far below the 256GB cap;
-  //    a Buffer body is the most portable across Node/Bun runtimes)
-  const body = fs.readFileSync(filePath)
+  // 2) PUT the file as a STREAM (far below the 256GB cap). Buffering the
+  //    whole MP4 in RAM OOMs Render's free tier — stream instead, with an
+  //    exact Content-Length from the file size.
+  const { Readable } = await import('stream')
+  const fileStream = Readable.toWeb(
+    fs.createReadStream(filePath)
+  ) as unknown as ReadableStream
   let up: Response
   try {
     up = await fetch(location, {
@@ -251,8 +255,9 @@ export async function uploadVideo(
         'Content-Type': 'video/mp4',
         'Content-Length': String(size),
       },
-      body: new Uint8Array(body),
-    })
+      body: fileStream,
+      duplex: 'half',
+    } as RequestInit)
   } catch (e) {
     throw new Error(`Upload transfer failed (${e instanceof Error ? e.message : e}). The session may be resumable — try again.`)
   }

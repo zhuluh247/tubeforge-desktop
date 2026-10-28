@@ -31,10 +31,13 @@ RUN bunx prisma generate \
 
 ENV NODE_ENV=production \
     HOSTNAME=0.0.0.0 \
-    PORT=3000
+    PORT=3000 \
+    RENDER_SCALE=720
 
 EXPOSE 3000
 
 # ensure the SQLite schema exists on a fresh disk, then serve
 # (mkdir also covers the free plan, where no disk is mounted)
-CMD ["sh", "-c", "mkdir -p /data/db /data/media && bunx prisma db push --skip-generate && node .next/standalone/server.js"]
+# --max-old-space-size=320 caps Node's heap so Next+Prisma never squeeze out
+# the ffmpeg child process on Render's 512MB free tier.
+CMD ["sh", "-c", "mkdir -p /data/db /data/media && bunx prisma db push --skip-generate && node --max-old-space-size=320 .next/standalone/server.js"]

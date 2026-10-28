@@ -52,8 +52,13 @@ export async function GET(
       if (isNaN(start) || start >= size) start = 0
       if (isNaN(end) || end >= size - 1) end = size - 1
       if (start > end) [start, end] = [0, size - 1]
-      const chunk = fs.readFileSync(filePath).subarray(start, end + 1)
-      return new NextResponse(new Uint8Array(chunk), {
+      // Stream ONLY the requested byte range — never read the whole file
+      // into memory (a video preview fires many small range requests, and
+      // buffering the full MP4 each time OOMs the 512MB Render free tier).
+      const rangeStream = Readable.toWeb(
+        fs.createReadStream(filePath, { start, end })
+      ) as unknown as ReadableStream
+      return new NextResponse(rangeStream, {
         status: 206,
         headers: {
           ...headers,
