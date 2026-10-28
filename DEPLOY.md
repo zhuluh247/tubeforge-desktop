@@ -41,24 +41,31 @@ git push -u origin main
 | `DATABASE_URL` | `file:/data/db/custom.db` |
 | `MEDIA_ROOT` | `/data/media` |
 
-The container auto-creates the DB schema on boot (`prisma db push`).
+The container auto-creates the DB schema on boot (`prisma db push`). The Docker image also bakes safe defaults (`file:/data/db/custom.db`, `/data/media`), so it boots even before you add these — the env vars matter when you relocate data to the persistent disk.
 
 ## 3 · Add the AI credentials (required!)
 
-The Z.ai SDK (scripts, voiceover, scene art, thumbnails) reads its credentials
-from a config **file**, not from your code. On Render you provide it with one
-environment variable — the app materializes the file automatically at boot:
+The Z.ai SDK (scripts, scene art, thumbnails) needs a Z.ai **Open Platform** API key:
 
-1. Open the file **`z-ai-config-SANDBOX.txt`** that came with your ZIP.
+1. Register at <https://z.ai/model-api> → create a **Standard API Key** at
+   <https://z.ai/manage-apikey/apikey-list> (top up at the Billing page if asked).
 2. Render Dashboard → your service → **Environment** → *Add environment variable*:
    - Key: `ZAI_CONFIG_JSON`
-   - Value: the single-line JSON from that file (already minified for copy-paste)
-3. **Save** — Render redeploys and the log will show
+   - Value: `{"baseUrl":"https://api.z.ai/api/paas/v4","apiKey":"YOUR_KEY"}` (one line)
+3. **Save** — the app materializes the config at boot and logs
    `[instrumentation] wrote .z-ai-config from ZAI_CONFIG_JSON env var`.
 
-If AI calls ever fail (the sandbox credential is session-scoped), replace the
-value with your own credentials in the same shape:
-`{"baseUrl":"<openai-compatible endpoint>","apiKey":"<your key>"}`.
+**Costs:** script/SEO generation uses `glm-4.5-flash` — **free**. Scene art +
+thumbnails use `glm-image` (~$0.01/image, a short video ≈ $0.10). Upgrade
+quality anytime with `ZAI_CHAT_MODEL` / `ZAI_IMAGE_MODEL` env vars.
+
+**Voiceover:** included free with **no key needed** — it uses Microsoft Edge
+neural voices (falls back to Google TTS). For premium voices, set `TTS_API_URL`
+(+ `TTS_API_KEY`) to any OpenAI-style `/audio/speech` endpoint.
+
+> The old sandbox credential (`internal-api.z.ai`) only works inside the build
+> sandbox — from Render it times out with `ConnectTimeoutError`. Use the
+> public `https://api.z.ai/api/paas/v4` baseUrl above.
 
 ## 4 · Connect your YouTube channel on the deployed URL
 

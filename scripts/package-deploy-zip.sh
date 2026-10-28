@@ -27,6 +27,9 @@ cp -r "$SRC/prisma" "$SRC/public" "$SRC/scripts" "$SRC/src" ./
 rm -rf node_modules .next .git db media download upload examples skills \
        tests mini-services .zscripts .env .claude \
        *.log *.tsbuildinfo worklog.md Caddyfile 2>/dev/null || true
+# public/ may contain the served copies of this very zip + the AI credentials
+# file (used for browser downloads) — they must NEVER ship inside the repo zip
+rm -f public/*.zip public/z-ai-config* public/*.txt 2>/dev/null || true
 
 # ── zip it (from STAGE so the archive has a top-level tubeforge/ folder) ────
 mkdir -p /home/z/my-project/download

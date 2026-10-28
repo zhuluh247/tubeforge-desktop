@@ -18,6 +18,14 @@ RUN bun install --frozen-lockfile
 
 # build the app
 COPY . .
+
+# Prisma validates the schema (and resolves DATABASE_URL) even during
+# `prisma generate` — and Render does NOT pass dashboard env vars into the
+# docker build. Bake safe defaults here; runtime env vars (render.yaml /
+# Render dashboard) still override them.
+ENV DATABASE_URL=file:/data/db/custom.db \
+    MEDIA_ROOT=/data/media
+
 RUN bunx prisma generate \
     && bun run build
 
@@ -28,4 +36,5 @@ ENV NODE_ENV=production \
 EXPOSE 3000
 
 # ensure the SQLite schema exists on a fresh disk, then serve
-CMD ["sh", "-c", "bunx prisma db push --skip-generate && node .next/standalone/server.js"]
+# (mkdir also covers the free plan, where no disk is mounted)
+CMD ["sh", "-c", "mkdir -p /data/db /data/media && bunx prisma db push --skip-generate && node .next/standalone/server.js"]
