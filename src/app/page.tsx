@@ -287,8 +287,8 @@ function StatTile({ label, value, icon }: { label: string; value: string | numbe
 
 function CreatePanel({ onCreated, disabled }: { onCreated: () => void; disabled: boolean }) {
   const [topic, setTopic] = useState('')
-  const [format, setFormat] = useState<'short' | 'long'>('short')
-  const [voice, setVoice] = useState('jam')
+  const [format, setFormat] = useState<'short' | 'long' | 'story' | 'howto'>('story')
+  const [voice, setVoice] = useState('')
   const [count, setCount] = useState('1')
   const [creating, setCreating] = useState(false)
   const isAuto = topic.trim() === ''
@@ -342,14 +342,20 @@ function CreatePanel({ onCreated, disabled }: { onCreated: () => void; disabled:
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
           <div className="space-y-1.5">
             <Label className="text-xs text-zinc-400">Format</Label>
-            <Select value={format} onValueChange={(v: 'short' | 'long') => setFormat(v)}>
+            <Select value={format} onValueChange={(v: 'short' | 'long' | 'story' | 'howto') => setFormat(v)}>
               <SelectTrigger className="h-10 text-xs bg-zinc-950 border-zinc-800"><SelectValue /></SelectTrigger>
               <SelectContent className="bg-zinc-900 border-zinc-800 text-zinc-200">
+                <SelectItem value="story" className="text-xs">
+                  <Smartphone className="w-3 h-3 mr-1.5 inline" /> Story Short (9:16)
+                </SelectItem>
+                <SelectItem value="howto" className="text-xs">
+                  <Film className="w-3 h-3 mr-1.5 inline" /> How-To (16:9)
+                </SelectItem>
                 <SelectItem value="short" className="text-xs">
-                  <Smartphone className="w-3 h-3 mr-1.5 inline" /> Short (9:16)
+                  <Smartphone className="w-3 h-3 mr-1.5 inline" /> Facts Short (9:16)
                 </SelectItem>
                 <SelectItem value="long" className="text-xs">
-                  <Film className="w-3 h-3 mr-1.5 inline" /> Long-form (16:9)
+                  <Film className="w-3 h-3 mr-1.5 inline" /> Facts Long (16:9)
                 </SelectItem>
               </SelectContent>
             </Select>
@@ -359,6 +365,7 @@ function CreatePanel({ onCreated, disabled }: { onCreated: () => void; disabled:
             <Select value={voice} onValueChange={setVoice}>
               <SelectTrigger className="h-10 text-xs bg-zinc-950 border-zinc-800"><SelectValue /></SelectTrigger>
               <SelectContent className="bg-zinc-900 border-zinc-800 text-zinc-200 max-h-64">
+                <SelectItem value="" className="text-xs">Auto — best voice per format</SelectItem>
                 {VOICE_OPTIONS.map(v => (
                   <SelectItem key={v.id} value={v.id} className="text-xs">{v.label}</SelectItem>
                 ))}

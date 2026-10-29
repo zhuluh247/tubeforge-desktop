@@ -74,8 +74,10 @@ export function DetailDialog({
           <div className="flex items-center gap-2 flex-wrap">
             <Badge variant="outline" className={`text-[10px] ${meta.badge}`}>{meta.label}</Badge>
             <Badge variant="outline" className="text-[10px] border-zinc-700 text-zinc-400">
-              {video.format === 'short' ? <Smartphone className="w-2.5 h-2.5 mr-1 inline" /> : <Film className="w-2.5 h-2.5 mr-1 inline" />}
-              {video.format === 'short' ? 'Short (9:16)' : 'Long-form (16:9)'}
+              {['short', 'story'].includes(video.format) ? <Smartphone className="w-2.5 h-2.5 mr-1 inline" /> : <Film className="w-2.5 h-2.5 mr-1 inline" />}
+              {video.format === 'story' ? 'Story Short (9:16)'
+                : video.format === 'howto' ? 'How-To (16:9)'
+                : video.format === 'short' ? 'Short (9:16)' : 'Long-form (16:9)'}
             </Badge>
             <span className="text-[11px] text-zinc-500">{fmtDuration(video.durationSec)}</span>
           </div>
@@ -98,7 +100,7 @@ export function DetailDialog({
               <ScrollArea className="h-[52vh] pr-2">
                 {hasVideo ? (
                   <div className="space-y-3">
-                    <div className={`mx-auto rounded-xl overflow-hidden border border-zinc-800 bg-black ${video.format === 'short' ? 'max-w-[270px]' : ''}`}>
+                    <div className={`mx-auto rounded-xl overflow-hidden border border-zinc-800 bg-black ${['short', 'story'].includes(video.format) ? 'max-w-[270px]' : ''}`}>
                       <video
                         src={assetUrl(video.id, 'video.mp4')}
                         controls

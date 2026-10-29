@@ -75,7 +75,7 @@ export function VideoCard({ video, onOpen, onChanged }: Props) {
     }
   }
 
-  const vertical = video.format === 'short'
+  const vertical = video.format === 'short' || video.format === 'story'
 
   return (
     <motion.div

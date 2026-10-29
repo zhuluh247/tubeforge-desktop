@@ -24,7 +24,16 @@ export async function getAutomation(): Promise<AutomationConfig> {
   const raw = await getSetting('automation')
   if (!raw) return { ...DEFAULT_AUTOMATION }
   try {
-    return { ...DEFAULT_AUTOMATION, ...JSON.parse(raw) }
+    const cfg = { ...DEFAULT_AUTOMATION, ...JSON.parse(raw) } as AutomationConfig
+    // One-time migration: the old default window (08→23) caused the "next
+    // video in ~11h" experience whenever the day's grid ran out. Users on the
+    // legacy window without an explicit reason get the full 24h even grid.
+    if (cfg.startHour === 8 && cfg.endHour === 23) {
+      cfg.startHour = DEFAULT_AUTOMATION.startHour
+      cfg.endHour = DEFAULT_AUTOMATION.endHour
+    }
+    // legacy format values stay valid; 'mixed' now alternates story/howto.
+    return cfg
   } catch {
     return { ...DEFAULT_AUTOMATION }
   }

@@ -10,7 +10,7 @@ export interface VideoLogRow {
 export interface VideoRow {
   id: string
   topic: string
-  format: 'short' | 'long'
+  format: 'short' | 'long' | 'story' | 'howto'
   voice: string
   status: string
   stage: string
@@ -48,7 +48,7 @@ export interface AutomationConfigUI {
   startHour: number
   endHour: number
   autoUpload: boolean
-  formats: 'short' | 'long' | 'mixed'
+  formats: 'short' | 'long' | 'story' | 'howto' | 'mixed'
   niche: string
 }
 

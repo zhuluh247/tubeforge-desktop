@@ -4,7 +4,7 @@ import path from 'path'
 // Override with MEDIA_ROOT env var when deploying (e.g. a Render persistent disk)
 export const MEDIA_ROOT = path.resolve(process.env.MEDIA_ROOT || path.join(process.cwd(), 'media'))
 
-export type VideoFormat = 'short' | 'long'
+export type VideoFormat = 'short' | 'long' | 'story' | 'howto'
 
 // ── Render scale ────────────────────────────────────────────────
 // 1080 (default) → Shorts 1080x1920, Long 1920x1080.
@@ -36,10 +36,13 @@ export const FORMATS: Record<
     captionFontSize: number
     captionMarginV: number
     captionOutline: number
+    captionColor: string
+    capsUppercase: boolean
     fps: number
     genImageSize: string
     assPlayRes: { x: number; y: number }
     ttsSpeed: number
+    voice: string
     targetDurSec: [number, number]
   }
 > = {
@@ -52,12 +55,15 @@ export const FORMATS: Record<
     captionFontSize: Math.max(18, Math.round(82 * K)),
     captionMarginV: Math.round(420 * K),
     captionOutline: Math.max(2, Math.round(7 * K)),
+    captionColor: '&H00FFFFFF',
+    capsUppercase: true,
     // 12 fps: half the frames of 24 → roughly half the encode time + RAM on
     // Render's free CPU, while Ken Burns motion still reads smoothly.
     fps: Math.min(30, Math.max(6, Number(process.env.FPS_SHORT) || 12)),
     genImageSize: '768x1344',
     assPlayRes: { x: even(1080 * K), y: even(1920 * K) },
     ttsSpeed: Number(process.env.TTS_SPEED_SHORT) || 1.18,
+    voice: 'jam',
     targetDurSec: [35, 60],
   },
   long: {
@@ -69,11 +75,56 @@ export const FORMATS: Record<
     captionFontSize: Math.max(18, Math.round(52 * K)),
     captionMarginV: Math.round(80 * K),
     captionOutline: Math.max(2, Math.round(4 * K)),
+    captionColor: '&H00FFFFFF',
+    capsUppercase: false,
     fps: 24,
     genImageSize: '1344x768',
     assPlayRes: { x: even(1920 * K), y: even(1080 * K) },
     ttsSpeed: 1.0,
+    voice: 'jam',
     targetDurSec: [150, 300],
+  },
+  // ── Story-cartoon Short (the flagship format) ─────────────────────────
+  // One protagonist, one shocking story, cliffhanger ending. Crossfaded
+  // scenes with camera motion, word-synced captions, emotional music bed.
+  story: {
+    label: 'Story Short (9:16)',
+    resolution: { w: even(1080 * K), h: even(1920 * K) },
+    sceneCount: [6, 8],
+    sceneMaxChars: 210,
+    captionWordsPerCard: Math.max(1, Number(process.env.CAPTION_WORDS_STORY) || 2),
+    captionFontSize: Math.max(18, Math.round(80 * K)),
+    captionMarginV: Math.round(400 * K),
+    captionOutline: Math.max(2, Math.round(7 * K)),
+    captionColor: '&H004AE2FF', // warm yellow (BGR) — sample-look captions
+    capsUppercase: false,
+    fps: Math.min(30, Math.max(6, Number(process.env.FPS_STORY) || 12)),
+    genImageSize: '768x1344',
+    assPlayRes: { x: even(1080 * K), y: even(1920 * K) },
+    ttsSpeed: Number(process.env.TTS_SPEED_STORY) || 1.35,
+    voice: 'luodo',
+    targetDurSec: [45, 75],
+  },
+  // ── How-To Educational (16:9) ─────────────────────────────────────────
+  // Clean step cards + flat illustrations + calm narrator. No character
+  // consistency needed, so it is the most reliable long-form engine.
+  howto: {
+    label: 'How-To Video (16:9)',
+    resolution: { w: even(1920 * K), h: even(1080 * K) },
+    sceneCount: [11, 13],
+    sceneMaxChars: 240,
+    captionWordsPerCard: 0, // step cards already carry the text — no burned captions
+    captionFontSize: Math.max(18, Math.round(52 * K)),
+    captionMarginV: Math.round(80 * K),
+    captionOutline: Math.max(2, Math.round(4 * K)),
+    captionColor: '&H00FFFFFF',
+    capsUppercase: false,
+    fps: Math.min(30, Math.max(12, Number(process.env.FPS_HOWTO) || 24)),
+    genImageSize: '1344x768',
+    assPlayRes: { x: even(1920 * K), y: even(1080 * K) },
+    ttsSpeed: Number(process.env.TTS_SPEED_HOWTO) || 1.2,
+    voice: 'jam',
+    targetDurSec: [75, 115],
   },
 }
 
@@ -123,23 +174,45 @@ export const SEED_TOPICS = [
   'Everyday things that are illegal in other countries',
 ]
 
+// ─── Story engine constants ───────────────────────────────────────────────
+
+// Stories rotate across the globe so the channel never feels local-only.
+// One region is drawn at random per video and fed to the scriptwriter.
+export const STORY_REGIONS = [
+  'Tokyo, Japan', 'Mexico City, Mexico', 'Mumbai, India', 'Berlin, Germany',
+  'São Paulo, Brazil', 'Cairo, Egypt', 'Seoul, South Korea', 'New York, USA',
+  'Istanbul, Türkiye', 'Jakarta, Indonesia', 'Nairobi, Kenya', 'Sydney, Australia',
+  'Lagos, Nigeria', 'Paris, France', 'Bangkok, Thailand', 'Toronto, Canada',
+]
+
+// Story visual style — locked across every scene so the art direction never
+// drifts inside one video.
+export const STORY_STYLE =
+  '3D Pixar-style cartoon, expressive character, vibrant saturated colors, dramatic cinematic lighting, ultra detailed, high quality render, no text, no watermark'
+
+// Timeline geometry for the crossfaded story timeline (seconds).
+export const STORY_XFADE = 0.5
+export const STORY_LEAD = 0.2
+export const STORY_TAIL = 0.9
+export const STORY_LAST_TAIL = 1.4
+
 export interface AutomationConfig {
   enabled: boolean
   videosPerDay: number
   startHour: number
   endHour: number
   autoUpload: boolean
-  formats: 'short' | 'long' | 'mixed'
+  formats: 'short' | 'long' | 'story' | 'howto' | 'mixed'
   niche: string
 }
 
 export const DEFAULT_AUTOMATION: AutomationConfig = {
   enabled: false,
-  videosPerDay: 3,
-  startHour: 8,
-  endHour: 23,
+  videosPerDay: 6,
+  startHour: 0,   // full 24h even grid: 6/day → 00:00, 04:00, 08:00, 12:00, 16:00, 20:00
+  endHour: 24,
   autoUpload: true,
-  formats: 'short',
+  formats: 'mixed',
   niche: 'Facts & Curiosities',
 }
 

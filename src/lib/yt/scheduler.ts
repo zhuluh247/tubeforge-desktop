@@ -1,8 +1,8 @@
 // ─── Fully-automatic scheduler: N videos/day, zero clicks ────────────────
 // Slot grid: the day's videos are spread EVENLY across the active window
-// (interval = window ÷ videosPerDay), so 6/day on an 8→23 window fires at
-// 08:00, 10:30, 13:00, 15:30, 18:00, 20:30 server time. The gap is capped
-// at 3 hours so fresh content always keeps flowing.
+// (interval = window ÷ videosPerDay). The default window is the FULL 24h,
+// so 6/day fires at 00:00, 04:00, 08:00, 12:00, 16:00, 20:00 server time
+// (Africa/Lagos on Render) — exactly the even spacing users expect.
 import { db } from '@/lib/db'
 import { getAutomation, setSetting, getSetting } from './settings'
 import { generateAutoTopic, fetchTrendingTopics } from './ai'
@@ -11,19 +11,17 @@ import { SEED_TOPICS, type VideoFormat } from './constants'
 
 const g = globalThis as unknown as { __tfSchedulerBooted?: boolean }
 
-// User-facing promise: a fresh video at least every 3 hours.
-const MAX_GAP_MS = 3 * 3600_000
-
 function windowHours(startHour: number, endHour: number): number {
   return endHour > startHour ? endHour - startHour : 24
 }
 
-/** Even spacing: interval = activeWindow / videosPerDay, capped at 3h
- *  (never shorter than 30 min). */
+/** Even spacing: interval = activeWindow / videosPerDay (never shorter than
+ *  30 min). No upper cap — the interval is exactly what the user's math
+ *  predicts (24h ÷ 6/day = 4h). */
 export function slotIntervalMs(videosPerDay: number, startHour: number, endHour: number): number {
   const n = Math.max(1, videosPerDay)
   const per = (windowHours(startHour, endHour) * 3600_000) / n
-  return Math.max(30 * 60_000, Math.min(MAX_GAP_MS, per))
+  return Math.max(30 * 60_000, per)
 }
 
 /** Next slot of the day's grid at/after `from`: windowStart + k·interval.
@@ -38,7 +36,7 @@ export function nextSlotMs(videosPerDay: number, startHour: number, endHour: num
     for (let k = 0; k < n; k++) {
       const t = base.getTime() + k * interval
       // a slot must still start inside the active window (endHour exclusive)
-      if (endHour > startHour && new Date(t).getHours() >= endHour) break
+      if (endHour > startHour && endHour < 24 && new Date(t).getHours() >= endHour) break
       if (t >= from) return t
     }
   }
@@ -54,14 +52,16 @@ async function recentTitles(): Promise<string[]> {
   return rows.map(r => r.title || r.topic).filter(Boolean)
 }
 
-async function pickFormat(formats: 'short' | 'long' | 'mixed'): Promise<VideoFormat> {
-  if (formats !== 'mixed') return formats
-  // balance: count existing, pick the rarer one
-  const [shorts, longs] = await Promise.all([
-    db.video.count({ where: { format: 'short' } }),
-    db.video.count({ where: { format: 'long' } }),
-  ])
-  return shorts <= longs ? 'short' : 'long'
+async function pickFormat(formats: 'short' | 'long' | 'story' | 'howto' | 'mixed'): Promise<VideoFormat> {
+  if (formats === 'mixed') {
+    // balance the two flagship content engines: pick the rarer one
+    const [story, howto] = await Promise.all([
+      db.video.count({ where: { format: 'story' } }),
+      db.video.count({ where: { format: 'howto' } }),
+    ])
+    return story <= howto ? 'story' : 'howto'
+  }
+  return formats
 }
 
 async function tick(): Promise<void> {
@@ -97,20 +97,22 @@ async function tick(): Promise<void> {
     await setSetting('nextAutoRunAt', String(following))
 
     // enqueue one auto video (topics ride live Google Trends when available)
+    const format = await pickFormat(cfg.formats)
     const titles = await recentTitles()
     const trends = await fetchTrendingTopics()
     let topic: string
     try {
-      topic = await generateAutoTopic(cfg.niche, titles)
+      topic = await generateAutoTopic(cfg.niche, titles, format)
     } catch {
       topic = SEED_TOPICS[Math.floor(Math.random() * SEED_TOPICS.length)]
     }
-    const format = await pickFormat(cfg.formats)
     const v = await db.video.create({
       data: {
         topic,
         format,
-        voice: (await getSetting('defaultVoice')) || 'jam',
+        // empty voice = pipeline picks the format's signature voice
+        // (story → expressive narrator, howto → calm British guide)
+        voice: '',
         status: 'queued',
         source: 'auto',
       },

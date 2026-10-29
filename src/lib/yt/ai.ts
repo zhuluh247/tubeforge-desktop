@@ -53,6 +53,11 @@ export async function getZAI(): Promise<ZAI> {
   return _zai
 }
 
+function isRateLimit(e: unknown): boolean {
+  const m = e instanceof Error ? e.message : String(e)
+  return m.includes('429') || m.toLowerCase().includes('too many requests')
+}
+
 async function chat(system: string, user: string, attempts = 3): Promise<string> {
   let lastErr: unknown
   for (let i = 1; i <= attempts; i++) {
@@ -74,7 +79,8 @@ async function chat(system: string, user: string, attempts = 3): Promise<string>
       return content
     } catch (e) {
       lastErr = e
-      if (i < attempts) await new Promise(r => setTimeout(r, 1200 * i))
+      // rate limits need real cooldowns — 1.2s retries never recover them
+      if (i < attempts) await new Promise(r => setTimeout(r, isRateLimit(e) ? 30_000 : 1200 * i))
     }
   }
   throw lastErr instanceof Error ? lastErr : new Error(String(lastErr))
@@ -105,6 +111,10 @@ export interface ScriptScene {
   narration: string
   imagePrompt: string
   caption: string
+  // howto only: a rendered step card instead of AI art for this segment
+  card?: { kind: 'title' | 'step' | 'recap' | 'outro'; stepNumber?: number; line1: string; line2?: string }
+  // howto only: silent breather segment (music only, no voice)
+  silent?: boolean
 }
 export interface VideoScript {
   title: string
@@ -114,6 +124,25 @@ export interface VideoScript {
   tags: string[]
   thumbnailText: string
   thumbnailPrompt: string
+  // story only: protagonist bible injected verbatim into every image prompt
+  character?: string
+}
+
+function sanitizeScenes(parsed: VideoScript, topic: string): VideoScript {
+  if (!parsed?.scenes?.length) throw new Error('Script missing scenes')
+  parsed.scenes = parsed.scenes
+    .filter(s => s && (s.narration?.trim() || s.card || s.silent))
+    .map(s => ({
+      narration: (s.narration || '').trim(),
+      imagePrompt: (s.imagePrompt || 'cinematic abstract background').trim(),
+      caption: (s.caption || '').trim().slice(0, 60),
+      card: s.card?.line1 ? { ...s.card, line1: String(s.card.line1).slice(0, 80) } : undefined,
+      silent: Boolean(s.silent),
+    }))
+  parsed.title = (parsed.title || topic).trim().slice(0, 100)
+  parsed.tags = Array.isArray(parsed.tags) ? parsed.tags.slice(0, 15).map(t => String(t).toLowerCase().slice(0, 40)) : []
+  parsed.thumbnailText = (parsed.thumbnailText || 'MIND BLOWN').toUpperCase().slice(0, 24)
+  return parsed
 }
 
 export async function generateScript(
@@ -123,6 +152,10 @@ export async function generateScript(
 ): Promise<VideoScript> {
   const f = FORMATS[format]
   const [minScenes, maxScenes] = f.sceneCount
+
+  if (format === 'story') return generateStoryScript(topic, niche, minScenes, maxScenes)
+  if (format === 'howto') return generateHowtoScript(topic, niche)
+
   const sys = `You are a viral YouTube faceless-channel scriptwriter for the "${niche}" niche. You write tight, factual, high-retention narration that is INFORMATION-DENSE: every single sentence delivers a new fact or twist — zero filler, zero "let's dive in", zero repetition. You ALWAYS reply with valid JSON only — no markdown fences, no commentary.`
 
   const user = `Write a complete production package for a ${f.label} about: "${topic}".
@@ -144,18 +177,77 @@ Reply with EXACTLY this JSON shape:
 
   const raw = await chat(sys, user)
   const parsed = extractJson(raw) as VideoScript
-  if (!parsed?.scenes?.length) throw new Error('Script missing scenes')
-  // sanitize
-  parsed.scenes = parsed.scenes
-    .filter(s => s?.narration?.trim())
-    .map(s => ({
-      narration: s.narration.trim(),
-      imagePrompt: (s.imagePrompt || 'cinematic abstract background').trim(),
-      caption: (s.caption || '').trim().slice(0, 60),
-    }))
-  parsed.title = (parsed.title || topic).trim().slice(0, 100)
-  parsed.tags = Array.isArray(parsed.tags) ? parsed.tags.slice(0, 15).map(t => String(t).toLowerCase().slice(0, 40)) : []
-  parsed.thumbnailText = (parsed.thumbnailText || 'MIND BLOWN').toUpperCase().slice(0, 24)
+  sanitizeScenes(parsed, topic)
+  return parsed
+}
+
+// ─── Story engine: shocking global mini-stories with a persistent lead ────
+
+const STORY_HOOK_EXAMPLES = `
+- "The phone showed him tomorrow. The third video showed HIS name."
+- "She took the night bus to save money. The driver never stopped driving."
+- "At 3:33 AM his smart speaker answered a question nobody had asked."`
+
+async function generateStoryScript(topic: string, niche: string, minScenes: number, maxScenes: number): Promise<VideoScript> {
+  const { STORY_REGIONS, STORY_STYLE } = await import('./constants')
+  const region = STORY_REGIONS[Math.floor(Math.random() * STORY_REGIONS.length)]
+
+  const sys = `You are a viral STORYTELLER for a faceless YouTube Shorts channel. You write gripping, SHOCKING short fiction that FEELS real — the kind of story strangers rewatch, finish, and comment "PART 2!!!" on. Stories are fictional but grounded: real-feeling streets, times, names, amounts — concrete details make them believable and binge-worthy. You ALWAYS reply with valid JSON only.`
+
+  const user = `Write a complete production package for a vertical STORY SHORT set in: ${region}.
+Story seed (adapt freely if a better idea serves it): "${topic}". Channel niche: ${niche}.
+
+RULES:
+- EXACTLY ${minScenes} to ${maxScenes} scenes. Each scene narration: max 210 characters, plain spoken sentences for text-to-speech (no emojis, no markdown, spell numbers naturally).
+- Scene 1 is the COLD-OPEN HOOK: the single most shocking image/moment of the whole story in one or two sentences. No setup, no "once upon a time". Examples of the energy:${STORY_HOOK_EXAMPLES}
+- Then escalate: setup → discovery → rising danger → twist. Pack CONCRETE specifics into every scene (exact times, street names, sums of money, ages, objects) — that is what makes it feel real and informative.
+- The FINAL scene is a CLIFFHANGER that flips everything and is left UNRESOLVED (viewers must beg for part 2).
+- script.character: ONE protagonist bible, 25-45 words: name, age, gender, ethnicity matching ${region}, two fixed facial features, one fixed outfit. This EXACT text will be pasted into every scene's image prompt, so every scene must draw the same person.
+- Every scene.imagePrompt: what the camera sees in THAT moment (15-30 words), ALWAYS opening with the protagonist exactly as described in script.character (when he/she is in the scene), plus setting, action, emotion, camera angle. Cinematic and dramatic. No text/words in the image.
+- Every scene.caption: 2-4 word punchy on-screen label.
+- script.title: clickbait-but-honest YouTube Shorts title, max 90 chars, curiosity gap.
+- script.description: 2-3 sentences + "Which part shocked you? Comment below." + subscribe call.
+- script.tags: 10-14 lowercase SEO tags. script.thumbnailText: 2-3 words ALL CAPS. script.thumbnailPrompt: the protagonist's face close-up with the most shocking prop, dramatic colors.
+
+Reply with EXACTLY this JSON shape:
+{"title":"...","hook":"...","character":"...","scenes":[{"narration":"...","imagePrompt":"...","caption":"..."}],"description":"...","tags":["..."],"thumbnailText":"...","thumbnailPrompt":"..."}`
+
+  const raw = await chat(sys, user)
+  const parsed = extractJson(raw) as VideoScript
+  sanitizeScenes(parsed, topic)
+  parsed.character = (parsed.character || `a young adult from ${region}, casually dressed`).trim().slice(0, 300)
+  // Lock the art direction: style suffix stored once, applied at render time.
+  parsed.thumbnailPrompt = `${parsed.thumbnailPrompt} ${STORY_STYLE}`
+  return parsed
+}
+
+// ─── How-To engine: clean 5-step educational video (16:9) ─────────────────
+
+async function generateHowtoScript(topic: string, niche: string): Promise<VideoScript> {
+  const sys = `You are a calm, credible educational YouTube scriptwriter. You teach ONE skill per video in exactly five concrete steps, information-dense but friendly. You ALWAYS reply with valid JSON only.`
+
+  const user = `Write a complete production package for a 16:9 educational video teaching: "${topic}". Niche: ${niche}.
+
+STRUCTURE — EXACTLY 13 segments in this order:
+1. {"card":{"kind":"title","line1":"<short main title>","line2":"<5-8 word subtitle>"},"narration":"One sentence announcing what the video teaches and the payoff."}
+2. intro illustration: {"narration":"One sentence: what the viewer will be able to do by the end.","imagePrompt":"flat modern vector illustration of the end result"}
+3-12. FIVE step pairs. Each pair is:
+   a) step card: {"card":{"kind":"step","stepNumber":N,"line1":"<2-5 word step title, CAPS>","line2":"<6-10 word one-line rule of thumb>"},"narration":"Step N. <2 informative sentences with one concrete detail, tool name, number or time estimate>"}
+   b) step illustration: {"silent":true,"imagePrompt":"flat modern vector illustration of step N in action"}
+13. recap card + outro: {"card":{"kind":"recap","line1":"THE 5 STEPS"},"narration":"Recap the five steps in one breath, then end with: Follow, because the next video goes even deeper."}
+
+RULES:
+- narration: plain sentences for text-to-speech, no emojis, no markdown, spell numbers naturally. Step narrations max 240 chars.
+- The five steps must be genuinely actionable and specific (name real free tools, real numbers, real first actions) — the video must teach something, not vague motivation.
+- Illustration imagePrompts: flat modern vector style, dark navy background with amber accents, minimal, high detail, NO text in the image.
+- script.title: max 90 chars, e.g. "How to X in 2026 (step by step)". script.description: 2-3 sentences + follow call. script.tags: 10-14 lowercase tags. script.thumbnailText: 2-4 words CAPS. script.thumbnailPrompt: bold flat illustration of the result, high contrast.
+
+Reply with EXACTLY this JSON shape:
+{"title":"...","hook":"...","scenes":[{"narration":"...","imagePrompt":"...","caption":"...","card":{...}|omitted,"silent":true|omitted}],"description":"...","tags":["..."],"thumbnailText":"...","thumbnailPrompt":"..."}`
+
+  const raw = await chat(sys, user)
+  const parsed = extractJson(raw) as VideoScript
+  sanitizeScenes(parsed, topic)
   return parsed
 }
 
@@ -201,29 +293,56 @@ export async function fetchTrendingTopics(): Promise<string[]> {
   }
 }
 
-export async function generateAutoTopic(niche: string, recentTitles: string[]): Promise<string> {
-  const sys = `You invent viral YouTube video topics for a faceless "${niche}" facts channel. Reply with ONLY the topic text — one line, no quotes, no numbering.`
+export async function generateAutoTopic(
+  niche: string,
+  recentTitles: string[],
+  format: VideoFormat = 'short'
+): Promise<string> {
+  const persona = format === 'story'
+    ? `You invent viral STORY premises for a faceless YouTube Shorts channel in the "${niche}" space. Reply with ONLY the premise text — one line, no quotes, no numbering.`
+    : format === 'howto'
+      ? `You invent high-demand HOW-TO video topics for an educational faceless YouTube channel in the "${niche}" space. Reply with ONLY the topic text — one line, no quotes, no numbering, phrased like "How to X ...".`
+      : `You invent viral YouTube video topics for a faceless "${niche}" facts channel. Reply with ONLY the topic text — one line, no quotes, no numbering.`
   const avoid = recentTitles.slice(0, 12).join(' | ') || 'none yet'
   // Ride live search demand: blend a trending search into the niche when it fits
   const trends = await fetchTrendingTopics()
   const trendLine = trends.length
     ? `\n\nLive Google Trends RIGHT NOW (massive search volume): ${trends.slice(0, 10).join(' | ')}. If one of these can be spun into a surprising "${niche}" angle — a fact, mystery, ranking or comparison people are ALREADY searching for — build the topic around it to ride that wave. Keep it evergreen enough to still make sense next week.`
     : ''
-  const user = `Invent one fresh, highly clickable facts topic (max 80 characters). Avoid anything similar to these existing titles: ${avoid}. Topics should be surprising, specific, and curiosity-driving.${trendLine}`
+  const ask = format === 'story'
+    ? `Invent one fresh fictional story premise (max 80 characters): an ordinary person in an ordinary place stumbles into one SHOCKING, impossible situation with twist potential. Avoid anything similar to these existing titles: ${avoid}.${trendLine}`
+    : format === 'howto'
+      ? `Invent one fresh how-to topic (max 80 characters, phrased "How to ...") that beginners actively search for and that can be taught in 5 free steps. Avoid anything similar to these existing titles: ${avoid}.${trendLine}`
+      : `Invent one fresh, highly clickable facts topic (max 80 characters). Avoid anything similar to these existing titles: ${avoid}. Topics should be surprising, specific, and curiosity-driving.${trendLine}`
+  const user = ask
   try {
-    const raw = await chat(sys, user)
+    const raw = await chat(persona, user)
     const topic = raw.split('\n')[0].replace(/^["'\d.\-\s]+/, '').trim()
     if (topic.length >= 8) return topic.slice(0, 90)
   } catch {
     /* fallback below */
   }
-  const fallback = [
-    '5 historical facts that sound completely made up',
-    'The strongest materials in the universe ranked',
-    'Places on Earth where gravity stops making sense',
-    'Animals that outlive humans by centuries',
-    'What NASA discovered in the last unexplored places',
-  ]
+  const fallback = format === 'story'
+    ? [
+        'A delivery rider finds a phone that texts tomorrow\'s news',
+        'The night-shift barber who recognizes a missing person',
+        'A tenant discovers the previous renter never left',
+        'A tourist bookings a room that does not exist by morning',
+      ]
+    : format === 'howto'
+      ? [
+          'How to start a faceless YouTube channel for free',
+          'How to learn any skill in 30 days',
+          'How to write a resume that beats the AI filters',
+          'How to grow your first 1000 followers',
+        ]
+      : [
+          '5 historical facts that sound completely made up',
+          'The strongest materials in the universe ranked',
+          'Places on Earth where gravity stops making sense',
+          'Animals that outlive humans by centuries',
+          'What NASA discovered in the last unexplored places',
+        ]
   return fallback[Math.floor(Math.random() * fallback.length)]
 }
 
@@ -269,7 +388,7 @@ async function ttsViaZai(text: string, voice: string, speed: number, outPath: st
   for (const chunk of chunks) {
     let lastErr: unknown
     let buf: Buffer | null = null
-    for (let i = 1; i <= 3 && !buf; i++) {
+    for (let i = 1; i <= 5 && !buf; i++) {
       try {
         const response = await zai.audio.tts.create({
           input: chunk,
@@ -283,7 +402,7 @@ async function ttsViaZai(text: string, voice: string, speed: number, outPath: st
         if (buf.length < 1000) { buf = null; throw new Error('TTS returned tiny/empty audio') }
       } catch (e) {
         lastErr = e
-        if (i < 3) await new Promise(r => setTimeout(r, 1500 * i))
+        if (i < 5) await new Promise(r => setTimeout(r, isRateLimit(e) ? 30_000 * i : 1500 * i))
       }
     }
     if (!buf) throw lastErr instanceof Error ? lastErr : new Error('TTS failed')
@@ -626,15 +745,34 @@ async function generateImageZai(prompt: string, size: string, outPath: string, a
       return
     } catch (e) {
       lastErr = e
-      if (i < attempts) await sleep(2500 * i)
+      if (i < attempts) await sleep(isRateLimit(e) ? 30_000 * i : 2500 * i)
     }
   }
   throw lastErr instanceof Error ? lastErr : new Error('Z.ai image generation failed')
 }
 
-export async function generateImage(prompt: string, size: string, outPath: string, sceneIdx: number): Promise<void> {
+export async function generateImage(
+  prompt: string,
+  size: string,
+  outPath: string,
+  sceneIdx: number,
+  opts: { preferZai?: boolean } = {}
+): Promise<void> {
   const provider = (process.env.IMAGE_PROVIDER || 'auto').toLowerCase()
   const errors: string[] = []
+
+  // 0) Story format: the Z.ai engine draws expressive cartoon characters far
+  //    better than Pollinations — when a free internal endpoint exists
+  //    (sandbox/internal deployments), use it FIRST. On public/Render setups
+  //    this attempt fails fast (no balance) and we continue down the free chain.
+  if (opts.preferZai && provider !== 'pollinations' && provider !== 'gradient' && zaiConfig()) {
+    try {
+      await generateImageZai(prompt, size, outPath, 3)
+      return
+    } catch (e) {
+      errors.push(`z.ai: ${e instanceof Error ? e.message : String(e)}`)
+    }
+  }
 
   // 1) FREE: Pollinations (default in "auto", forced with IMAGE_PROVIDER=pollinations)
   if (provider === 'auto' || provider === 'pollinations') {
@@ -674,6 +812,16 @@ export async function generateImage(prompt: string, size: string, outPath: strin
 
 export function sanitizeImagePrompt(p: string): string {
   return `${p.replace(/["\n]/g, ' ').slice(0, 420)}, cinematic film still, dramatic volumetric lighting, vivid saturated colors, high contrast, ultra detailed, photorealistic, eye-catching composition, no text, no watermark`
+}
+
+/** Story scenes use the locked cartoon art direction instead of photorealism. */
+export function sanitizeStoryPrompt(p: string, style: string): string {
+  return `${p.replace(/["\n]/g, ' ').slice(0, 520)}, ${style}`
+}
+
+/** How-To illustrations: flat vector look, no photorealism. */
+export function sanitizeHowtoPrompt(p: string): string {
+  return `${p.replace(/["\n]/g, ' ').slice(0, 420)}, flat modern vector illustration, minimal clean composition, dark navy background with amber accents, high detail, no text, no watermark`
 }
 
 export function scriptDir(videoId: string): string {

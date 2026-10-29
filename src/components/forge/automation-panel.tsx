@@ -69,10 +69,10 @@ export function AutomationPanel({
     return `${s}s`
   })()
 
-  // spacing preview — same math as the server: window ÷ per-day, max 3h gap
+  // spacing preview — same math as the server: window ÷ per-day (no cap)
   const spacing = (() => {
     const win = local.endHour > local.startHour ? local.endHour - local.startHour : 24
-    const mins = Math.min(180, Math.max(30, (win * 60) / Math.max(1, local.videosPerDay)))
+    const mins = Math.max(30, (win * 60) / Math.max(1, local.videosPerDay))
     return mins >= 60 ? `${(mins / 60).toFixed(mins % 60 === 0 ? 0 : 1)}h` : `${Math.round(mins)}m`
   })()
 
@@ -119,9 +119,11 @@ export function AutomationPanel({
             <Select value={local.formats} onValueChange={v => save({ formats: v as AutomationConfigUI['formats'] })} disabled={disabled}>
               <SelectTrigger className="h-8 text-xs bg-zinc-950 border-zinc-800"><SelectValue /></SelectTrigger>
               <SelectContent className="bg-zinc-900 border-zinc-800 text-zinc-200">
-                <SelectItem value="mixed" className="text-xs">Mixed (balanced)</SelectItem>
-                <SelectItem value="short" className="text-xs">Shorts only (9:16)</SelectItem>
-                <SelectItem value="long" className="text-xs">Long-form only (16:9)</SelectItem>
+                <SelectItem value="mixed" className="text-xs">Alternate: Story + How-To</SelectItem>
+                <SelectItem value="story" className="text-xs">Story Shorts — cartoon drama (9:16)</SelectItem>
+                <SelectItem value="howto" className="text-xs">How-To videos — clean guide (16:9)</SelectItem>
+                <SelectItem value="short" className="text-xs">Facts Shorts — legacy (9:16)</SelectItem>
+                <SelectItem value="long" className="text-xs">Facts long-form — legacy (16:9)</SelectItem>
               </SelectContent>
             </Select>
           </div>

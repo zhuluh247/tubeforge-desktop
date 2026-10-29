@@ -18,8 +18,10 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
     const topic = typeof body.topic === 'string' ? body.topic.trim() : ''
-    const format = body.format === 'long' ? 'long' : 'short'
-    const voice = typeof body.voice === 'string' && body.voice ? body.voice : await getDefaultVoice()
+    const format = (['short', 'long', 'story', 'howto'].includes(body.format)
+      ? body.format
+      : 'short') as 'short' | 'long' | 'story' | 'howto'
+    const voice = typeof body.voice === 'string' && body.voice ? body.voice : ''
     const count = Math.min(5, Math.max(1, parseInt(body.count, 10) || 1))
     if (topic && topic !== '__auto__' && topic.length > 200) {
       return NextResponse.json({ error: 'Topic too long (max 200 chars)' }, { status: 400 })
