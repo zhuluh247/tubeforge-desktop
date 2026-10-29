@@ -288,7 +288,7 @@ function StatTile({ label, value, icon }: { label: string; value: string | numbe
 function CreatePanel({ onCreated, disabled }: { onCreated: () => void; disabled: boolean }) {
   const [topic, setTopic] = useState('')
   const [format, setFormat] = useState<'short' | 'long' | 'story' | 'howto'>('story')
-  const [voice, setVoice] = useState('')
+  const [voice, setVoice] = useState('auto')
   const [count, setCount] = useState('1')
   const [creating, setCreating] = useState(false)
   const isAuto = topic.trim() === ''
@@ -299,7 +299,7 @@ function CreatePanel({ onCreated, disabled }: { onCreated: () => void; disabled:
       const res = await fetch('/api/videos', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ topic: isAuto ? '__auto__' : topic.trim(), format, voice, count: Number(count) }),
+        body: JSON.stringify({ topic: isAuto ? '__auto__' : topic.trim(), format, voice: voice === 'auto' ? '' : voice, count: Number(count) }),
       })
       const json = await res.json()
       if (!res.ok) throw new Error(json.error || 'Failed to queue video')
@@ -365,7 +365,7 @@ function CreatePanel({ onCreated, disabled }: { onCreated: () => void; disabled:
             <Select value={voice} onValueChange={setVoice}>
               <SelectTrigger className="h-10 text-xs bg-zinc-950 border-zinc-800"><SelectValue /></SelectTrigger>
               <SelectContent className="bg-zinc-900 border-zinc-800 text-zinc-200 max-h-64">
-                <SelectItem value="" className="text-xs">Auto — best voice per format</SelectItem>
+                <SelectItem value="auto" className="text-xs">Auto — best voice per format</SelectItem>
                 {VOICE_OPTIONS.map(v => (
                   <SelectItem key={v.id} value={v.id} className="text-xs">{v.label}</SelectItem>
                 ))}
