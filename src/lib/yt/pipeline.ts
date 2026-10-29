@@ -30,6 +30,19 @@ interface SceneResolved {
 
 const GAP = 0.1 // seconds of pause between scenes — snappy, no dead air
 
+/** Stable per-video seed for the image engine. Same seed + same character
+ *  description across all scenes of one video = a consistent character look
+ *  on seed-aware models (Pollinations flux). salt shifts the seed for
+ *  one-off assets like the thumbnail so they don't clone a scene. */
+function seedFor(videoId: string, salt = 0): number {
+  let h = 2166136261 ^ salt
+  for (let i = 0; i < videoId.length; i++) {
+    h ^= videoId.charCodeAt(i)
+    h = Math.imul(h, 16777619)
+  }
+  return Math.abs(h) % 1_000_000_000
+}
+
 // howto segment geometry (sequential hard-cut timeline)
 const HOWTO_LEAD = 0.25
 const HOWTO_TAIL = 0.55
@@ -113,7 +126,8 @@ async function finish(
   const thumbBase = path.join(dir, 'thumb_base.png')
   await generateImage(
     sanitizeImagePrompt(script.thumbnailPrompt + ', bold dramatic YouTube thumbnail background, high contrast'),
-    '1344x768', thumbBase, 1
+    '1344x768', thumbBase, 1,
+    { seed: seedFor(videoId, 7919) }
   )
   const thumbPath = path.join(dir, 'thumb.jpg')
   await makeThumbnail(thumbBase || thumbBaseSource, script.thumbnailText, thumbPath, dir)
@@ -196,7 +210,8 @@ async function renderFacts(
     const visual = `${script.scenes[i].imagePrompt}. Depict exactly this moment: ${ctx}`
     await generateImage(
       sanitizeImagePrompt(visual),
-      f.genImageSize, scenes[i].image, i
+      f.genImageSize, scenes[i].image, i,
+      { seed: seedFor(videoId) }
     )
     await setStage(videoId, 'visualizing', `Scene art ${i + 1}/${scenes.length}`, 31 + (24 * (i + 1)) / scenes.length)
     await log(videoId, 'visual', `Scene ${i + 1} art ready`)
@@ -324,7 +339,7 @@ async function renderStory(
     await generateImage(
       sanitizeStoryPrompt(visual, STORY_STYLE),
       f.genImageSize, scenes[i].image, i,
-      { preferZai: true } // cartoon leads come out far better on the Z.ai engine
+      { preferZai: true, seed: seedFor(videoId) } // cartoon leads come out far better on the Z.ai engine
     )
     await setStage(videoId, 'visualizing', `Scene art ${i + 1}/${n}`, 31 + (24 * (i + 1)) / n)
     await log(videoId, 'visual', `Scene ${i + 1} art ready`)
@@ -470,7 +485,8 @@ async function renderHowto(
     if (cardDefs[i]) continue // already rendered as a card
     await generateImage(
       sanitizeHowtoPrompt(segs[i].imagePrompt),
-      f.genImageSize, cardOutPaths[i], i
+      f.genImageSize, cardOutPaths[i], i,
+      { seed: seedFor(videoId) }
     )
     art++
     await setStage(videoId, 'visualizing', `Art ${art}/${n}`, 31 + (24 * (i + 1)) / n)

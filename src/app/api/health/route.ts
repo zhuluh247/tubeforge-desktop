@@ -6,7 +6,7 @@ export const dynamic = 'force-dynamic'
 
 /** Deployment stamp + binary diagnostics. Bump BUILD_TAG with every release
  *  so it's instantly obvious which build a tab is connected to. */
-const BUILD_TAG = 'v0.3.1-selectfix'
+const BUILD_TAG = 'v0.3.2-imgchain'
 
 export async function GET() {
   let ffmpeg = 'MISSING'

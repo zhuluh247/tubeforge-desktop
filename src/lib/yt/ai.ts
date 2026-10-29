@@ -627,11 +627,36 @@ function concatWavBuffers(buffers: Buffer[]): Buffer {
 
 // ─── Image generation ────────────────────────────────────────────────────
 // 100% FREE by default:
-//   1. Pollinations.ai (Flux) — no API key, no balance, no cost.
-//   2. Z.ai images (PAID, opt-in only via IMAGE_PROVIDER=zai).
-//   3. Procedural gradient — guarantees the pipeline never dies.
+//   1. Cloudflare Workers AI flux-1-schnell (opt-in: own free account,
+//      10,000 neurons/day ≈ 35 images, no credit card, ~2s per image).
+//   2. Pollinations.ai (Flux) — no key at all; anonymous tier paces at
+//      ~1 image / 45s per IP (server tells us the exact wait on 402).
+//   3. Z.ai images — PAID on the public API. The sandbox credential
+//      (internal-api.z.ai) is quota-bound to sandbox-origin traffic, so on
+//      Render it always dies with billing error 1113 — a circuit breaker
+//      disables it after the first balance error instead of wasting
+//      minutes of retries per scene.
+//   4. Procedural gradient — guarantees the pipeline never dies.
 
 const GRADIENT_FALLBACKS = ['0x0f172a:0x334155', '0x1c1917:0x57534e', '0x14532d:0x4ade80', '0x450a0a:0xf87171']
+
+/** Billing/quota rejection (Z.ai code 1113 and friends). Not transient —
+ *  retrying can never succeed, so we trip a circuit breaker instead. */
+function isBalanceError(e: unknown): boolean {
+  const m = e instanceof Error ? e.message : String(e)
+  return /1113|insufficient balance|no resource package|please recharge/i.test(m)
+}
+
+let _zaiImageDeadUntil = 0
+function zaiImageAlive(): boolean {
+  return Date.now() >= _zaiImageDeadUntil
+}
+function killZaiImages(reason: string): void {
+  if (Date.now() < _zaiImageDeadUntil) return
+  _zaiImageDeadUntil = Date.now() + 6 * 3600_000
+  console.warn(`[image] Z.ai image engine disabled for 6h — ${reason}`)
+  console.warn('[image] Falling back to the 100% free engine (videos stay $0).')
+}
 
 function sleep(ms: number): Promise<void> {
   return new Promise(r => setTimeout(r, ms))
@@ -662,11 +687,12 @@ function parseRetryAfterMs(body: string): number | null {
   return m ? Math.ceil(parseFloat(m[1]) * 1000) : null
 }
 
-async function generateImagePollinations(prompt: string, size: string, outPath: string): Promise<void> {
+async function generateImagePollinations(prompt: string, size: string, outPath: string, seed?: number): Promise<void> {
   const { w, h } = pollinationsSize(size)
   const configured = process.env.IMAGE_FREE_MODEL // pin one model only if explicitly set
-  const models = configured ? [configured] : ['flux', 'turbo', 'flux', 'turbo', 'turbo']
+  const models = configured ? [configured] : ['flux', 'flux', 'flux', 'turbo']
   const gapMs = Math.max(1000, Number(process.env.IMAGE_FREE_GAP_MS) || 46_000)
+  const pollen = process.env.POLLINATIONS_TOKEN?.trim() // optional free token = higher limits
   let lastErr: unknown
 
   for (let i = 0; i < models.length; i++) {
@@ -676,12 +702,14 @@ async function generateImagePollinations(prompt: string, size: string, outPath: 
       if (since < gapMs) await sleep(gapMs - since)
       _lastPollinationsAt = Date.now()
 
-      const u = new URL(`https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}`)
+      const u = new URL(`https://image.pollinations.ai/prompt/${encodeURIComponent(prompt.slice(0, 1900))}`)
       u.searchParams.set('width', String(w))
       u.searchParams.set('height', String(h))
       u.searchParams.set('model', models[i])
       u.searchParams.set('nologo', 'true')
-      u.searchParams.set('seed', String(Math.floor(Math.random() * 1e9)))
+      // LOCKED seed across scenes of one video = consistent character look
+      u.searchParams.set('seed', String(seed ?? Math.floor(Math.random() * 1e9)))
+      if (pollen) u.searchParams.set('token', pollen)
       const res = await fetch(u, {
         headers: { 'User-Agent': 'Mozilla/5.0 (compatible; TubeForge/1.0)' },
         signal: AbortSignal.timeout(180_000),
@@ -708,7 +736,49 @@ async function generateImagePollinations(prompt: string, size: string, outPath: 
   throw lastErr instanceof Error ? lastErr : new Error('pollinations failed')
 }
 
-/** Z.ai image API — PAID (needs balance/resource package). Opt-in upgrade. */
+/** Cloudflare Workers AI (flux-1-schnell) — opt-in free premium engine.
+ *  Free plan: 10,000 neurons/day (≈35 images), no credit card. Enable with
+ *  CLOUDFLARE_ACCOUNT_ID + CLOUDFLARE_API_TOKEN (Workers AI permission).
+ *  Fast (~2-5s) and reliable from Render — perfect for Auto-Pilot.
+ *  The model outputs a fixed square, so we cover-crop to the target aspect
+ *  (attention-aware) and upscale with lanczos. */
+async function generateImageCloudflare(prompt: string, size: string, outPath: string): Promise<void> {
+  const account = process.env.CLOUDFLARE_ACCOUNT_ID?.trim()
+  const token = process.env.CLOUDFLARE_API_TOKEN?.trim()
+  if (!account || !token) throw new Error('cloudflare: CLOUDFLARE_ACCOUNT_ID / CLOUDFLARE_API_TOKEN not set')
+  const res = await fetch(
+    `https://api.cloudflare.com/client/v4/accounts/${account}/ai/run/@cf/black-forest-labs/flux-1-schnell`,
+    {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt: prompt.slice(0, 2040), steps: 4 }),
+      signal: AbortSignal.timeout(180_000),
+    }
+  )
+  const j = (await res.json().catch(() => null)) as {
+    success?: boolean; result?: { image?: string }; errors?: unknown
+  } | null
+  const b64 = j?.result?.image
+  if (!res.ok || !j?.success || !b64) {
+    const detail = j?.errors ? JSON.stringify(j.errors).slice(0, 140) : res.statusText
+    throw new Error(`cloudflare responded ${res.status}: ${detail}`)
+  }
+  const buf = Buffer.from(b64, 'base64')
+  if (buf.length < 5000) throw new Error('cloudflare returned no image')
+  const [w, h] = size.split('x').map(Number)
+  if (!w || !h || (w === 1024 && h === 1024)) {
+    fs.writeFileSync(outPath, buf)
+    return
+  }
+  const sharp = (await import('sharp')).default
+  await sharp(buf)
+    .resize(w, h, { fit: 'cover', position: sharp.strategy.attention, kernel: 'lanczos3' })
+    .png()
+    .toFile(outPath)
+}
+
+/** Z.ai image API — PAID (needs balance/resource package). Opt-in upgrade.
+ *  Balance/quota errors (1113) abort instantly and trip the circuit breaker. */
 async function generateImageZai(prompt: string, size: string, outPath: string, attempts: number): Promise<void> {
   let lastErr: unknown
   for (let i = 1; i <= attempts; i++) {
@@ -745,6 +815,11 @@ async function generateImageZai(prompt: string, size: string, outPath: string, a
       return
     } catch (e) {
       lastErr = e
+      // Billing rejections are permanent — never burn attempts/backoffs on them.
+      if (isBalanceError(e)) {
+        killZaiImages(e instanceof Error ? e.message : String(e))
+        break
+      }
       if (i < attempts) await sleep(isRateLimit(e) ? 30_000 * i : 2500 * i)
     }
   }
@@ -756,16 +831,50 @@ export async function generateImage(
   size: string,
   outPath: string,
   sceneIdx: number,
-  opts: { preferZai?: boolean } = {}
+  opts: { preferZai?: boolean; seed?: number } = {}
 ): Promise<void> {
   const provider = (process.env.IMAGE_PROVIDER || 'auto').toLowerCase()
   const errors: string[] = []
+  const cfWanted = provider === 'auto' || provider === 'cloudflare'
+  const cfConfigured = !!(process.env.CLOUDFLARE_ACCOUNT_ID?.trim() && process.env.CLOUDFLARE_API_TOKEN?.trim())
+
+  async function gradient(): Promise<void> {
+    const [w, h] = size.split('x')
+    const pal = GRADIENT_FALLBACKS[sceneIdx % GRADIENT_FALLBACKS.length]
+    const [c0, c1] = pal.split(':')
+    const { run, ffmpegBin } = await import('./media')
+    await run(ffmpegBin(), [
+      '-y', '-f', 'lavfi', '-i', `gradients=s=${w}x${h}:c0=${c0}:c1=${c1}:x0=0:y0=0:x1=${w}:y1=${h}`,
+      '-frames:v', '1', outPath,
+    ])
+  }
+
+  if (provider === 'gradient') {
+    await gradient()
+    return
+  }
+
+  if (provider === 'zai') {
+    if (zaiConfig()) {
+      try {
+        await generateImageZai(prompt, size, outPath, 4)
+        return
+      } catch (e) {
+        errors.push(`z.ai: ${e instanceof Error ? e.message : String(e)}`)
+      }
+    }
+    await gradient()
+    console.warn(`[image] gradient used for scene ${sceneIdx}: ${errors.join(' | ')}`)
+    return
+  }
+
+  // ── auto / cloudflare / pollinations chain ──
 
   // 0) Story format: the Z.ai engine draws expressive cartoon characters far
-  //    better than Pollinations — when a free internal endpoint exists
-  //    (sandbox/internal deployments), use it FIRST. On public/Render setups
-  //    this attempt fails fast (no balance) and we continue down the free chain.
-  if (opts.preferZai && provider !== 'pollinations' && provider !== 'gradient' && zaiConfig()) {
+  //    better than the free engines — use it FIRST only when a config exists
+  //    AND it actually has quota (sandbox/internal deployments). On Render the
+  //    circuit breaker makes this skip instantly instead of retrying for minutes.
+  if (opts.preferZai && provider === 'auto' && zaiConfig() && zaiImageAlive()) {
     try {
       await generateImageZai(prompt, size, outPath, 3)
       return
@@ -774,39 +883,38 @@ export async function generateImage(
     }
   }
 
-  // 1) FREE: Pollinations (default in "auto", forced with IMAGE_PROVIDER=pollinations)
-  if (provider === 'auto' || provider === 'pollinations') {
+  // 1) FREE premium: Cloudflare Workers AI (own free account, 10k neurons/day)
+  if (cfWanted && cfConfigured) {
     try {
-      await generateImagePollinations(prompt, size, outPath)
+      await generateImageCloudflare(prompt, size, outPath)
+      return
+    } catch (e) {
+      errors.push(`cloudflare: ${e instanceof Error ? e.message : String(e)}`)
+    }
+  }
+
+  // 2) FREE keyless: Pollinations flux (locked seed = consistent character)
+  if (provider === 'auto' || provider === 'pollinations' || provider === 'cloudflare') {
+    try {
+      await generateImagePollinations(prompt, size, outPath, opts.seed)
       return
     } catch (e) {
       errors.push(`pollinations: ${e instanceof Error ? e.message : String(e)}`)
     }
   }
 
-  // 2) PAID: Z.ai (opt-in via IMAGE_PROVIDER=zai; in "auto" only as backup, 2 tries)
-  if (provider === 'auto' || provider === 'zai') {
-    if (zaiConfig()) {
-      try {
-        await generateImageZai(prompt, size, outPath, provider === 'zai' ? 4 : 2)
-        return
-      } catch (e) {
-        errors.push(`z.ai: ${e instanceof Error ? e.message : String(e)}`)
-      }
+  // 3) Backup: Z.ai only when the breaker hasn't tripped (1 quick attempt)
+  if (provider === 'auto' && zaiConfig() && zaiImageAlive()) {
+    try {
+      await generateImageZai(prompt, size, outPath, 2)
+      return
+    } catch (e) {
+      errors.push(`z.ai: ${e instanceof Error ? e.message : String(e)}`)
     }
-  } else if (provider !== 'pollinations' && provider !== 'gradient') {
-    errors.push(`unknown IMAGE_PROVIDER "${provider}"`)
   }
 
-  // 3) Fallback: procedural gradient so the pipeline never dies
-  const [w, h] = size.split('x')
-  const pal = GRADIENT_FALLBACKS[sceneIdx % GRADIENT_FALLBACKS.length]
-  const [c0, c1] = pal.split(':')
-  const { run, ffmpegBin } = await import('./media')
-  await run(ffmpegBin(), [
-    '-y', '-f', 'lavfi', '-i', `gradients=s=${w}x${h}:c0=${c0}:c1=${c1}:x0=0:y0=0:x1=${w}:y1=${h}`,
-    '-frames:v', '1', outPath,
-  ])
+  // 4) Fallback: procedural gradient so the pipeline never dies
+  await gradient()
   console.warn(`[image] fallback gradient used for scene ${sceneIdx}: ${errors.join(' | ') || 'no provider available'}`)
 }
 

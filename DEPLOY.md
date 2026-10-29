@@ -56,16 +56,43 @@ The Z.ai SDK (scripts, scene art, thumbnails) needs a Z.ai **Open Platform** API
    `[instrumentation] wrote .z-ai-config from ZAI_CONFIG_JSON env var`.
 
 **Costs:** script/SEO generation uses `glm-4.5-flash` — **free**. Scene art +
-thumbnails use `glm-image` (~$0.01/image, a short video ≈ $0.10). Upgrade
-quality anytime with `ZAI_CHAT_MODEL` / `ZAI_IMAGE_MODEL` env vars.
+thumbnails are **free by default** (see below — no Z.ai image credits needed).
+Upgrade quality anytime with `ZAI_CHAT_MODEL` / `ZAI_IMAGE_MODEL` env vars.
+
+> The old sandbox credential (`internal-api.z.ai`) only works inside the build
+> sandbox — from Render it reaches the public gateway but has **no image
+> quota** there (billing error `1113 "Insufficient balance or no resource
+> package"`). Since v0.3.2 TubeForge detects that error once and disables the
+> Z.ai image engine for 6h instead of burning minutes of retries per scene —
+> the free engine takes over immediately. You can safely delete
+> `ZAI_CONFIG_JSON` unless you want Z.ai scripts; scripts need a working key.
+
+### Scene images — the free engine chain (videos stay $0)
+
+`IMAGE_PROVIDER=auto` (default) walks this ladder per scene:
+
+1. **Cloudflare Workers AI** (opt-in, recommended): free account, **10,000
+   neurons/day ≈ 35 images**, no credit card, ~2-5s per image. Create a free
+   account at <https://dash.cloudflare.com> → *Workers & Pages → Workers AI*,
+   then add two env vars to Render:
+   - `CLOUDFLARE_ACCOUNT_ID` (dashboard → any account page → right side)
+   - `CLOUDFLARE_API_TOKEN` (create with the **Workers AI: Edit** permission)
+2. **Pollinations.ai Flux** — zero setup, zero key, works forever. Anonymous
+   tier paces at ~1 image / 45s per IP (the server names its own retry wait,
+   TubeForge honors it automatically). Optional free "pollen" token from
+   <https://enter.pollinations.ai> raises the limits — set `POLLINATIONS_TOKEN`.
+3. **Z.ai images** — only if configured AND it actually has balance (paid).
+4. **Procedural gradient** — last-resort so a render never dies.
+
+Character consistency is engine-independent: TubeForge locks **one seed per
+video** and injects the same character description into every scene prompt,
+so the lead looks like the same person across all scenes.
+
+Force a specific engine with `IMAGE_PROVIDER=cloudflare|pollinations|zai|gradient`.
 
 **Voiceover:** included free with **no key needed** — it uses Microsoft Edge
 neural voices (falls back to Google TTS). For premium voices, set `TTS_API_URL`
 (+ `TTS_API_KEY`) to any OpenAI-style `/audio/speech` endpoint.
-
-> The old sandbox credential (`internal-api.z.ai`) only works inside the build
-> sandbox — from Render it times out with `ConnectTimeoutError`. Use the
-> public `https://api.z.ai/api/paas/v4` baseUrl above.
 
 ## 4 · Connect your YouTube channel on the deployed URL
 
